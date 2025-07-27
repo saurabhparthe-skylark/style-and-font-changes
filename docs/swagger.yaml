@@ -1,0 +1,263 @@
+info:
+  contact: {}
+paths:
+  /:
+    get:
+      consumes:
+      - application/json
+      description: Get basic worker information and status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Worker information
+      tags:
+      - health
+  /cameras:
+    get:
+      consumes:
+      - application/json
+      description: Get list of all cameras and their status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List cameras
+      tags:
+      - camera
+    post:
+      consumes:
+      - application/json
+      description: Add a new camera to the worker for processing
+      parameters:
+      - description: Camera configuration
+        in: body
+        name: camera
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Add camera
+      tags:
+      - camera
+  /cameras/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: Remove a camera from the worker
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Remove camera
+      tags:
+      - camera
+  /cameras/{id}/frame:
+    get:
+      consumes:
+      - application/json
+      description: Get the latest processed frame from a camera
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get latest frame
+      tags:
+      - camera
+  /cameras/{id}/status:
+    get:
+      consumes:
+      - application/json
+      description: Get status of a specific camera
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get camera status
+      tags:
+      - camera
+  /health:
+    get:
+      consumes:
+      - application/json
+      description: Check if the worker is healthy and responsive
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Health check
+      tags:
+      - health
+  /system/debug:
+    get:
+      consumes:
+      - application/json
+      description: Get debug information for troubleshooting
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get debug info
+      tags:
+      - system
+  /system/stats:
+    get:
+      consumes:
+      - application/json
+      description: Get system statistics and performance metrics
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get system stats
+      tags:
+      - system
+  /webrtc/{id}/urls:
+    get:
+      consumes:
+      - application/json
+      description: Get streaming URLs for a specific camera
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get stream URLs
+      tags:
+      - webrtc
+  /webrtc/control:
+    post:
+      consumes:
+      - application/json
+      description: Control WebRTC streaming for cameras
+      parameters:
+      - description: WebRTC control
+        in: body
+        name: control
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      summary: WebRTC control
+      tags:
+      - webrtc
+  /webrtc/status:
+    get:
+      consumes:
+      - application/json
+      description: Get WebRTC status for all cameras
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: WebRTC status
+      tags:
+      - webrtc
+swagger: "2.0"
