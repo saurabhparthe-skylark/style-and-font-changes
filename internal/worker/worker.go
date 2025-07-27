@@ -261,3 +261,7 @@ func (w *Worker) processCameraStream(camera *CameraInstance) {
 		}
 	}
 }
+
+func (w *Worker) GetWebRTCPublisher() *webrtc.Publisher {
+	return w.webrtc
+}

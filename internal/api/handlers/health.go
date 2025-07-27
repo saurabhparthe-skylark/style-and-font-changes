@@ -2,21 +2,28 @@ package handlers
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// HealthHandler handles health-related endpoints
 type HealthHandler struct {
 	WorkerID string
 }
 
-// NewHealthHandler creates a new health handler
 func NewHealthHandler(workerID string) *HealthHandler {
-	return &HealthHandler{
-		WorkerID: workerID,
-	}
+	return &HealthHandler{WorkerID: workerID}
+}
+
+type HealthResponse struct {
+	Status   string `json:"status" example:"healthy"`
+	WorkerID string `json:"worker_id" example:"worker-1"`
+}
+
+type WorkerInfoResponse struct {
+	WorkerID     string   `json:"worker_id" example:"worker-1"`
+	Status       string   `json:"status" example:"running"`
+	Version      string   `json:"version" example:"1.0.0"`
+	Capabilities []string `json:"capabilities"`
 }
 
 // @Summary Health check
@@ -24,30 +31,28 @@ func NewHealthHandler(workerID string) *HealthHandler {
 // @Tags health
 // @Accept json
 // @Produce json
-// @Success 200 {object} map[string]interface{}
+// @Success 200 {object} HealthResponse
 // @Router /health [get]
 func (h *HealthHandler) HealthCheck(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"status":    "healthy",
-		"worker_id": h.WorkerID,
-		"timestamp": time.Now().Unix(),
+	c.JSON(http.StatusOK, HealthResponse{
+		Status:   "healthy",
+		WorkerID: h.WorkerID,
 	})
 }
 
 // @Summary Worker information
-// @Description Get basic worker information and status
+// @Description Get basic worker information and capabilities
 // @Tags health
 // @Accept json
 // @Produce json
-// @Success 200 {object} map[string]interface{}
+// @Success 200 {object} WorkerInfoResponse
 // @Router / [get]
 func (h *HealthHandler) WorkerInfo(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"worker_id": h.WorkerID,
-		"status":    "running",
-		"timestamp": time.Now().Unix(),
-		"version":   "1.0.0",
-		"capabilities": []string{
+	c.JSON(http.StatusOK, WorkerInfoResponse{
+		WorkerID: h.WorkerID,
+		Status:   "running",
+		Version:  "1.0.0",
+		Capabilities: []string{
 			"rtsp_processing",
 			"webrtc_streaming",
 			"ai_detection",

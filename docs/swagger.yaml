@@ -1,3 +1,124 @@
+definitions:
+  handlers.CameraListResponse:
+    properties:
+      cameras:
+        items:
+          $ref: '#/definitions/handlers.CameraResponse'
+        type: array
+      total:
+        example: 3
+        type: integer
+    type: object
+  handlers.CameraResponse:
+    properties:
+      camera_id:
+        example: cam1
+        type: string
+      message:
+        example: Camera started successfully
+        type: string
+      status:
+        example: active
+        type: string
+      stream_url:
+        example: rtsp://camera.example.com/stream
+        type: string
+    type: object
+  handlers.CameraStatusResponse:
+    properties:
+      active:
+        example: true
+        type: boolean
+      camera_id:
+        example: cam1
+        type: string
+      processing_info:
+        additionalProperties: true
+        type: object
+      stream_info:
+        additionalProperties: true
+        type: object
+      webrtc_info:
+        additionalProperties: true
+        type: object
+    type: object
+  handlers.HealthResponse:
+    properties:
+      status:
+        example: healthy
+        type: string
+      worker_id:
+        example: worker-1
+        type: string
+    type: object
+  handlers.StartCameraRequest:
+    properties:
+      solutions:
+        example:
+        - person_detection
+        - ppe_detection
+        items:
+          type: string
+        type: array
+      stream_url:
+        example: rtsp://camera.example.com/stream
+        type: string
+    required:
+    - solutions
+    - stream_url
+    type: object
+  handlers.StreamURLsResponse:
+    properties:
+      camera_id:
+        example: cam1
+        type: string
+      hls:
+        example: http://172.17.0.1:8888/camera_cam1/index.m3u8
+        type: string
+      rtsp:
+        example: rtsp://172.17.0.1:8554/camera_cam1
+        type: string
+      webrtc:
+        example: http://172.17.0.1:8889/camera_cam1/whep
+        type: string
+    type: object
+  handlers.SystemStatsResponse:
+    properties:
+      cpu_cores:
+        example: 8
+        type: integer
+      go_version:
+        example: go1.21.0
+        type: string
+      goroutines:
+        example: 25
+        type: integer
+      memory_mb:
+        example: 45
+        type: integer
+      uptime:
+        example: 2h30m15s
+        type: string
+      worker_id:
+        example: worker-1
+        type: string
+    type: object
+  handlers.WorkerInfoResponse:
+    properties:
+      capabilities:
+        items:
+          type: string
+        type: array
+      status:
+        example: running
+        type: string
+      version:
+        example: 1.0.0
+        type: string
+      worker_id:
+        example: worker-1
+        type: string
+    type: object
 info:
   contact: {}
 paths:
@@ -5,15 +126,14 @@ paths:
     get:
       consumes:
       - application/json
-      description: Get basic worker information and status
+      description: Get basic worker information and capabilities
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/handlers.WorkerInfoResponse'
       summary: Worker information
       tags:
       - health
@@ -28,97 +148,54 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
-      summary: List cameras
+            $ref: '#/definitions/handlers.CameraListResponse'
+      summary: List all cameras
       tags:
-      - camera
+      - cameras
+  /cameras/{id}/start:
     post:
       consumes:
       - application/json
-      description: Add a new camera to the worker for processing
+      description: Start processing for a camera with RTSP stream
       parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
       - description: Camera configuration
         in: body
         name: camera
         required: true
         schema:
-          type: object
+          $ref: '#/definitions/handlers.StartCameraRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/handlers.CameraResponse'
         "400":
           description: Bad Request
           schema:
-            additionalProperties: true
+            additionalProperties:
+              type: string
             type: object
-      summary: Add camera
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Start camera processing
       tags:
-      - camera
-  /cameras/{id}:
-    delete:
-      consumes:
-      - application/json
-      description: Remove a camera from the worker
-      parameters:
-      - description: Camera ID
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "404":
-          description: Not Found
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Remove camera
-      tags:
-      - camera
-  /cameras/{id}/frame:
-    get:
-      consumes:
-      - application/json
-      description: Get the latest processed frame from a camera
-      parameters:
-      - description: Camera ID
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "404":
-          description: Not Found
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Get latest frame
-      tags:
-      - camera
+      - cameras
   /cameras/{id}/status:
     get:
       consumes:
       - application/json
-      description: Get status of a specific camera
+      description: Get detailed status of a specific camera
       parameters:
       - description: Camera ID
         in: path
@@ -131,16 +208,49 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/handlers.CameraStatusResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties: true
+            additionalProperties:
+              type: string
             type: object
       summary: Get camera status
       tags:
-      - camera
+      - cameras
+  /cameras/{id}/stop:
+    post:
+      consumes:
+      - application/json
+      description: Stop processing for a camera
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.CameraResponse'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Stop camera processing
+      tags:
+      - cameras
   /health:
     get:
       consumes:
@@ -152,48 +262,30 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/handlers.HealthResponse'
       summary: Health check
       tags:
       - health
-  /system/debug:
-    get:
-      consumes:
-      - application/json
-      description: Get debug information for troubleshooting
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-      summary: Get debug info
-      tags:
-      - system
   /system/stats:
     get:
       consumes:
       - application/json
-      description: Get system statistics and performance metrics
+      description: Get system performance metrics and status
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
-      summary: Get system stats
+            $ref: '#/definitions/handlers.SystemStatsResponse'
+      summary: Get system statistics
       tags:
       - system
   /webrtc/{id}/urls:
     get:
       consumes:
       - application/json
-      description: Get streaming URLs for a specific camera
+      description: Get streaming URLs for all formats (HLS, WebRTC, RTSP) for a camera
       parameters:
       - description: Camera ID
         in: path
@@ -206,49 +298,26 @@ paths:
         "200":
           description: OK
           schema:
-            additionalProperties: true
-            type: object
+            $ref: '#/definitions/handlers.StreamURLsResponse'
         "404":
           description: Not Found
           schema:
-            additionalProperties: true
+            additionalProperties:
+              type: string
             type: object
       summary: Get stream URLs
       tags:
       - webrtc
-  /webrtc/control:
-    post:
-      consumes:
-      - application/json
-      description: Control WebRTC streaming for cameras
-      parameters:
-      - description: WebRTC control
-        in: body
-        name: control
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties: true
-            type: object
-      summary: WebRTC control
-      tags:
-      - webrtc
-  /webrtc/status:
+  /webrtc/stats:
     get:
       consumes:
       - application/json
-      description: Get WebRTC status for all cameras
+      description: Get WebRTC publishing statistics for a camera or all cameras
+      parameters:
+      - description: Camera ID (optional, returns all if not specified)
+        in: query
+        name: id
+        type: string
       produces:
       - application/json
       responses:
@@ -257,7 +326,7 @@ paths:
           schema:
             additionalProperties: true
             type: object
-      summary: WebRTC status
+      summary: Get WebRTC statistics
       tags:
       - webrtc
 swagger: "2.0"

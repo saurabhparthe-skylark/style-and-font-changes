@@ -43,16 +43,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create API server
-	apiServer := api.NewServer(cfg)
-	if err := apiServer.Setup(); err != nil {
-		log.Error("Failed to setup API server", "error", err)
-		os.Exit(1)
-	}
-
 	// Start worker core
 	if err := w.Start(); err != nil {
 		log.Error("Failed to start worker", "error", err)
+		os.Exit(1)
+	}
+
+	// Create API server with worker and WebRTC publisher
+	apiServer := api.NewServer(cfg, w, w.GetWebRTCPublisher())
+	if err := apiServer.Setup(); err != nil {
+		log.Error("Failed to setup API server", "error", err)
 		os.Exit(1)
 	}
 

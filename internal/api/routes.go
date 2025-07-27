@@ -7,22 +7,19 @@ func (s *Server) setupRoutes() {
 	cameras := s.router.Group("/cameras")
 	{
 		cameras.GET("", s.cameraHandler.ListCameras)
-		cameras.POST("", s.cameraHandler.AddCamera)
-		cameras.DELETE("/:id", s.cameraHandler.RemoveCamera)
+		cameras.POST("/:id/start", s.cameraHandler.StartCamera)
+		cameras.POST("/:id/stop", s.cameraHandler.StopCamera)
 		cameras.GET("/:id/status", s.cameraHandler.GetCameraStatus)
-		cameras.GET("/:id/frame", s.cameraHandler.GetLatestFrame)
 	}
 
 	webrtc := s.router.Group("/webrtc")
 	{
-		webrtc.POST("/control", s.webrtcHandler.Control)
-		webrtc.GET("/status", s.webrtcHandler.Status)
 		webrtc.GET("/:id/urls", s.webrtcHandler.GetStreamURLs)
+		webrtc.GET("/stats", s.webrtcHandler.GetStats)
 	}
 
 	system := s.router.Group("/system")
 	{
 		system.GET("/stats", s.systemHandler.GetStats)
-		system.GET("/debug", s.systemHandler.GetDebugInfo)
 	}
 }

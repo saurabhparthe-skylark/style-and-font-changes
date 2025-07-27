@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"fmt"
-	"kepler-worker/internal/api/handlers"
-	"kepler-worker/internal/config"
 	"net/http"
 	"time"
+
+	"kepler-worker/internal/api/handlers"
+	"kepler-worker/internal/config"
+	"kepler-worker/internal/webrtc"
+	"kepler-worker/internal/worker"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,26 +25,23 @@ type Server struct {
 	systemHandler *handlers.SystemHandler
 }
 
-func NewServer(cfg *config.Config) *Server {
+func NewServer(cfg *config.Config, w *worker.Worker, publisher *webrtc.Publisher) *Server {
 	gin.SetMode(gin.ReleaseMode)
-
 	router := gin.New()
 
 	return &Server{
 		config:        cfg,
 		router:        router,
 		healthHandler: handlers.NewHealthHandler(cfg.Worker.ID),
-		cameraHandler: handlers.NewCameraHandler(),
-		webrtcHandler: handlers.NewWebRTCHandler(),
+		cameraHandler: handlers.NewCameraHandler(w),
+		webrtcHandler: handlers.NewWebRTCHandler(publisher),
 		systemHandler: handlers.NewSystemHandler(cfg.Worker.ID),
 	}
 }
 
 func (s *Server) Setup() error {
 	s.setupMiddleware()
-
 	s.setupRoutes()
-
 	s.setupSwagger()
 
 	s.server = &http.Server{

@@ -1,91 +1,98 @@
 package handlers
 
 import (
-	"fmt"
+	"kepler-worker/internal/webrtc"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// WebRTCHandler handles WebRTC-related endpoints
-type WebRTCHandler struct{}
-
-// NewWebRTCHandler creates a new WebRTC handler
-func NewWebRTCHandler() *WebRTCHandler {
-	return &WebRTCHandler{}
+type WebRTCHandler struct {
+	publisher *webrtc.Publisher
 }
 
-// @Summary WebRTC control
-// @Description Control WebRTC streaming for cameras
-// @Tags webrtc
-// @Accept json
-// @Produce json
-// @Param control body object true "WebRTC control"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} map[string]interface{}
-// @Router /webrtc/control [post]
-func (h *WebRTCHandler) Control(c *gin.Context) {
-	var request struct {
-		CameraID string `json:"camera_id" binding:"required"`
-		Action   string `json:"action" binding:"required"` // "start" or "stop"
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Invalid request format",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	// TODO: Add actual WebRTC control logic
-	c.JSON(http.StatusOK, gin.H{
-		"success":   true,
-		"camera_id": request.CameraID,
-		"action":    request.Action,
-		"message":   fmt.Sprintf("WebRTC %s successful", request.Action),
-		"timestamp": time.Now().Unix(),
-	})
+func NewWebRTCHandler(publisher *webrtc.Publisher) *WebRTCHandler {
+	return &WebRTCHandler{publisher: publisher}
 }
 
-// @Summary WebRTC status
-// @Description Get WebRTC status for all cameras
-// @Tags webrtc
-// @Accept json
-// @Produce json
-// @Success 200 {object} map[string]interface{}
-// @Router /webrtc/status [get]
-func (h *WebRTCHandler) Status(c *gin.Context) {
-	// TODO: Add actual WebRTC status logic
-	c.JSON(http.StatusOK, gin.H{
-		"success":   true,
-		"cameras":   []gin.H{},
-		"total":     0,
-		"timestamp": time.Now().Unix(),
-	})
+type StreamURLsResponse struct {
+	CameraID string `json:"camera_id" example:"cam1"`
+	HLS      string `json:"hls" example:"http://172.17.0.1:8888/camera_cam1/index.m3u8"`
+	WebRTC   string `json:"webrtc" example:"http://172.17.0.1:8889/camera_cam1/whep"`
+	RTSP     string `json:"rtsp" example:"rtsp://172.17.0.1:8554/camera_cam1"`
+}
+
+type WebRTCStatsResponse struct {
+	CameraID    string                 `json:"camera_id" example:"cam1"`
+	Active      bool                   `json:"active" example:"true"`
+	StreamPath  string                 `json:"stream_path" example:"camera_cam1"`
+	Uptime      string                 `json:"uptime" example:"5m30s"`
+	Processing  map[string]interface{} `json:"processing"`
+	WHIPSession map[string]interface{} `json:"whip_session"`
 }
 
 // @Summary Get stream URLs
-// @Description Get streaming URLs for a specific camera
+// @Description Get streaming URLs for all formats (HLS, WebRTC, RTSP) for a camera
 // @Tags webrtc
 // @Accept json
 // @Produce json
-// @Param id path string true "Camera ID"
-// @Success 200 {object} map[string]interface{}
-// @Failure 404 {object} map[string]interface{}
+// @Param id path string true "Camera ID" example:"cam1"
+// @Success 200 {object} StreamURLsResponse
+// @Failure 404 {object} map[string]string
 // @Router /webrtc/{id}/urls [get]
 func (h *WebRTCHandler) GetStreamURLs(c *gin.Context) {
 	cameraID := c.Param("id")
 
-	// TODO: Add actual stream URL logic
-	c.JSON(http.StatusOK, gin.H{
-		"success":   true,
-		"camera_id": cameraID,
-		"urls": gin.H{
-			"whip": fmt.Sprintf("/whip/%s", cameraID),
-			"hls":  fmt.Sprintf("/hls/%s/index.m3u8", cameraID),
-		},
-		"timestamp": time.Now().Unix(),
+	if h.publisher == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "WebRTC publisher not available"})
+		return
+	}
+
+	hls := h.publisher.GetStreamURL(cameraID, "hls")
+	webrtc := h.publisher.GetStreamURL(cameraID, "webrtc")
+	rtsp := h.publisher.GetStreamURL(cameraID, "rtsp")
+
+	if hls == "" && webrtc == "" && rtsp == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found or not publishing"})
+		return
+	}
+
+	c.JSON(http.StatusOK, StreamURLsResponse{
+		CameraID: cameraID,
+		HLS:      hls,
+		WebRTC:   webrtc,
+		RTSP:     rtsp,
 	})
+}
+
+// @Summary Get WebRTC statistics
+// @Description Get WebRTC publishing statistics for a camera or all cameras
+// @Tags webrtc
+// @Accept json
+// @Produce json
+// @Param id query string false "Camera ID (optional, returns all if not specified)" example:"cam1"
+// @Success 200 {object} map[string]interface{}
+// @Router /webrtc/stats [get]
+func (h *WebRTCHandler) GetStats(c *gin.Context) {
+	if h.publisher == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "WebRTC publisher not available"})
+		return
+	}
+
+	cameraID := c.Query("id")
+	stats := h.publisher.GetStats(cameraID)
+
+	if cameraID != "" && len(stats) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found or not publishing"})
+		return
+	}
+
+	if cameraID != "" {
+		c.JSON(http.StatusOK, stats)
+	} else {
+		c.JSON(http.StatusOK, gin.H{
+			"cameras": stats,
+			"total":   len(stats),
+		})
+	}
 }

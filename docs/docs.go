@@ -17,7 +17,7 @@ const docTemplate = `{
     "paths": {
         "/": {
             "get": {
-                "description": "Get basic worker information and status",
+                "description": "Get basic worker information and capabilities",
                 "consumes": [
                     "application/json"
                 ],
@@ -32,8 +32,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/handlers.WorkerInfoResponse"
                         }
                     }
                 }
@@ -49,21 +48,22 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "camera"
+                    "cameras"
                 ],
-                "summary": "List cameras",
+                "summary": "List all cameras",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/handlers.CameraListResponse"
                         }
                     }
                 }
-            },
+            }
+        },
+        "/cameras/{id}/start": {
             "post": {
-                "description": "Add a new camera to the worker for processing",
+                "description": "Start processing for a camera with RTSP stream",
                 "consumes": [
                     "application/json"
                 ],
@@ -71,17 +71,24 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "camera"
+                    "cameras"
                 ],
-                "summary": "Add camera",
+                "summary": "Start camera processing",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "Camera configuration",
                         "name": "camera",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "type": "object"
+                            "$ref": "#/definitions/handlers.StartCameraRequest"
                         }
                     }
                 ],
@@ -89,95 +96,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/handlers.CameraResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/cameras/{id}": {
-            "delete": {
-                "description": "Remove a camera from the worker",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "camera"
-                ],
-                "summary": "Remove camera",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Camera ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/cameras/{id}/frame": {
-            "get": {
-                "description": "Get the latest processed frame from a camera",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "camera"
-                ],
-                "summary": "Get latest frame",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Camera ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -185,7 +122,7 @@ const docTemplate = `{
         },
         "/cameras/{id}/status": {
             "get": {
-                "description": "Get status of a specific camera",
+                "description": "Get detailed status of a specific camera",
                 "consumes": [
                     "application/json"
                 ],
@@ -193,7 +130,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "camera"
+                    "cameras"
                 ],
                 "summary": "Get camera status",
                 "parameters": [
@@ -209,15 +146,66 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/handlers.CameraStatusResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": true
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cameras/{id}/stop": {
+            "post": {
+                "description": "Stop processing for a camera",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cameras"
+                ],
+                "summary": "Stop camera processing",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.CameraResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -240,32 +228,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/system/debug": {
-            "get": {
-                "description": "Get debug information for troubleshooting",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "system"
-                ],
-                "summary": "Get debug info",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/handlers.HealthResponse"
                         }
                     }
                 }
@@ -273,7 +236,7 @@ const docTemplate = `{
         },
         "/system/stats": {
             "get": {
-                "description": "Get system statistics and performance metrics",
+                "description": "Get system performance metrics and status",
                 "consumes": [
                     "application/json"
                 ],
@@ -283,21 +246,20 @@ const docTemplate = `{
                 "tags": [
                     "system"
                 ],
-                "summary": "Get system stats",
+                "summary": "Get system statistics",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/handlers.SystemStatsResponse"
                         }
                     }
                 }
             }
         },
-        "/webrtc/control": {
-            "post": {
-                "description": "Control WebRTC streaming for cameras",
+        "/webrtc/stats": {
+            "get": {
+                "description": "Get WebRTC publishing statistics for a camera or all cameras",
                 "consumes": [
                     "application/json"
                 ],
@@ -307,49 +269,15 @@ const docTemplate = `{
                 "tags": [
                     "webrtc"
                 ],
-                "summary": "WebRTC control",
+                "summary": "Get WebRTC statistics",
                 "parameters": [
                     {
-                        "description": "WebRTC control",
-                        "name": "control",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object"
-                        }
+                        "type": "string",
+                        "description": "Camera ID (optional, returns all if not specified)",
+                        "name": "id",
+                        "in": "query"
                     }
                 ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/webrtc/status": {
-            "get": {
-                "description": "Get WebRTC status for all cameras",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "webrtc"
-                ],
-                "summary": "WebRTC status",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -363,7 +291,7 @@ const docTemplate = `{
         },
         "/webrtc/{id}/urls": {
             "get": {
-                "description": "Get streaming URLs for a specific camera",
+                "description": "Get streaming URLs for all formats (HLS, WebRTC, RTSP) for a camera",
                 "consumes": [
                     "application/json"
                 ],
@@ -387,17 +315,190 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/handlers.StreamURLsResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": true
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "handlers.CameraListResponse": {
+            "type": "object",
+            "properties": {
+                "cameras": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.CameraResponse"
+                    }
+                },
+                "total": {
+                    "type": "integer",
+                    "example": 3
+                }
+            }
+        },
+        "handlers.CameraResponse": {
+            "type": "object",
+            "properties": {
+                "camera_id": {
+                    "type": "string",
+                    "example": "cam1"
+                },
+                "message": {
+                    "type": "string",
+                    "example": "Camera started successfully"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "active"
+                },
+                "stream_url": {
+                    "type": "string",
+                    "example": "rtsp://camera.example.com/stream"
+                }
+            }
+        },
+        "handlers.CameraStatusResponse": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "camera_id": {
+                    "type": "string",
+                    "example": "cam1"
+                },
+                "processing_info": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "stream_info": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "webrtc_info": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            }
+        },
+        "handlers.HealthResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "example": "healthy"
+                },
+                "worker_id": {
+                    "type": "string",
+                    "example": "worker-1"
+                }
+            }
+        },
+        "handlers.StartCameraRequest": {
+            "type": "object",
+            "required": [
+                "solutions",
+                "stream_url"
+            ],
+            "properties": {
+                "solutions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "person_detection",
+                        "ppe_detection"
+                    ]
+                },
+                "stream_url": {
+                    "type": "string",
+                    "example": "rtsp://camera.example.com/stream"
+                }
+            }
+        },
+        "handlers.StreamURLsResponse": {
+            "type": "object",
+            "properties": {
+                "camera_id": {
+                    "type": "string",
+                    "example": "cam1"
+                },
+                "hls": {
+                    "type": "string",
+                    "example": "http://172.17.0.1:8888/camera_cam1/index.m3u8"
+                },
+                "rtsp": {
+                    "type": "string",
+                    "example": "rtsp://172.17.0.1:8554/camera_cam1"
+                },
+                "webrtc": {
+                    "type": "string",
+                    "example": "http://172.17.0.1:8889/camera_cam1/whep"
+                }
+            }
+        },
+        "handlers.SystemStatsResponse": {
+            "type": "object",
+            "properties": {
+                "cpu_cores": {
+                    "type": "integer",
+                    "example": 8
+                },
+                "go_version": {
+                    "type": "string",
+                    "example": "go1.21.0"
+                },
+                "goroutines": {
+                    "type": "integer",
+                    "example": 25
+                },
+                "memory_mb": {
+                    "type": "integer",
+                    "example": 45
+                },
+                "uptime": {
+                    "type": "string",
+                    "example": "2h30m15s"
+                },
+                "worker_id": {
+                    "type": "string",
+                    "example": "worker-1"
+                }
+            }
+        },
+        "handlers.WorkerInfoResponse": {
+            "type": "object",
+            "properties": {
+                "capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string",
+                    "example": "running"
+                },
+                "version": {
+                    "type": "string",
+                    "example": "1.0.0"
+                },
+                "worker_id": {
+                    "type": "string",
+                    "example": "worker-1"
                 }
             }
         }

@@ -8,58 +8,46 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SystemHandler handles system-related endpoints
 type SystemHandler struct {
-	WorkerID string
+	WorkerID  string
+	StartTime time.Time
 }
 
-// NewSystemHandler creates a new system handler
 func NewSystemHandler(workerID string) *SystemHandler {
 	return &SystemHandler{
-		WorkerID: workerID,
+		WorkerID:  workerID,
+		StartTime: time.Now(),
 	}
 }
 
-// @Summary Get system stats
-// @Description Get system statistics and performance metrics
+type SystemStatsResponse struct {
+	WorkerID   string `json:"worker_id" example:"worker-1"`
+	Uptime     string `json:"uptime" example:"2h30m15s"`
+	MemoryMB   uint64 `json:"memory_mb" example:"45"`
+	CPUCores   int    `json:"cpu_cores" example:"8"`
+	Goroutines int    `json:"goroutines" example:"25"`
+	GoVersion  string `json:"go_version" example:"go1.21.0"`
+}
+
+// @Summary Get system statistics
+// @Description Get system performance metrics and status
 // @Tags system
 // @Accept json
 // @Produce json
-// @Success 200 {object} map[string]interface{}
+// @Success 200 {object} SystemStatsResponse
 // @Router /system/stats [get]
 func (h *SystemHandler) GetStats(c *gin.Context) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"stats": gin.H{
-			"worker_id":  h.WorkerID,
-			"uptime":     time.Now().Unix(),
-			"memory_mb":  m.Alloc / 1024 / 1024,
-			"cpu_cores":  runtime.NumCPU(),
-			"goroutines": runtime.NumGoroutine(),
-			"go_version": runtime.Version(),
-		},
-		"timestamp": time.Now().Unix(),
-	})
-}
+	uptime := time.Since(h.StartTime)
 
-// @Summary Get debug info
-// @Description Get debug information for troubleshooting
-// @Tags system
-// @Accept json
-// @Produce json
-// @Success 200 {object} map[string]interface{}
-// @Router /system/debug [get]
-func (h *SystemHandler) GetDebugInfo(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"debug": gin.H{
-			"worker_id":  h.WorkerID,
-			"endpoints":  []string{"/health", "/cameras", "/webrtc", "/system"},
-			"components": []string{"camera_manager", "webrtc_publisher"},
-		},
-		"timestamp": time.Now().Unix(),
+	c.JSON(http.StatusOK, SystemStatsResponse{
+		WorkerID:   h.WorkerID,
+		Uptime:     uptime.String(),
+		MemoryMB:   m.Alloc / 1024 / 1024,
+		CPUCores:   runtime.NumCPU(),
+		Goroutines: runtime.NumGoroutine(),
+		GoVersion:  runtime.Version(),
 	})
 }

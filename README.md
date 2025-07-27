@@ -163,17 +163,87 @@ MEDIAMTX_RTSP=rtsp://172.17.0.1:8554    # RTSP endpoint
 
 ## API Endpoints
 
-The worker exposes a comprehensive REST API:
+The worker exposes a clean, minimal REST API:
 
 ```
-GET  /health              # Health check
-GET  /                    # Worker information
-GET  /cameras             # List all cameras
-POST /cameras/{id}/start  # Start camera processing
-POST /cameras/{id}/stop   # Stop camera processing
-GET  /cameras/{id}/status # Get camera status
-GET  /webrtc/{id}/urls    # Get WebRTC stream URLs
-GET  /system/stats        # System statistics
+# Health and Info
+GET  /health                    # Health check
+GET  /                          # Worker information and capabilities
+
+# Camera Management  
+GET  /cameras                   # List all cameras
+POST /cameras/{id}/start        # Start camera processing
+POST /cameras/{id}/stop         # Stop camera processing  
+GET  /cameras/{id}/status       # Get detailed camera status
+
+# WebRTC Streaming
+GET  /webrtc/{id}/urls          # Get stream URLs (HLS, WebRTC, RTSP)
+GET  /webrtc/stats              # Get WebRTC statistics (all cameras)
+GET  /webrtc/stats?id={id}      # Get WebRTC statistics (specific camera)
+
+# System Monitoring
+GET  /system/stats              # System performance metrics
+```
+
+### API Request/Response Examples
+
+#### Start Camera
+```bash
+POST /cameras/cam1/start
+Content-Type: application/json
+
+{
+  "stream_url": "rtsp://camera.example.com/stream",
+  "solutions": ["person_detection", "ppe_detection"]
+}
+
+# Response:
+{
+  "camera_id": "cam1",
+  "status": "started", 
+  "stream_url": "rtsp://camera.example.com/stream",
+  "message": "Camera started successfully"
+}
+```
+
+#### Get Stream URLs
+```bash
+GET /webrtc/cam1/urls
+
+# Response:
+{
+  "camera_id": "cam1",
+  "hls": "http://172.17.0.1:8888/camera_cam1/index.m3u8",
+  "webrtc": "http://172.17.0.1:8889/camera_cam1/whep", 
+  "rtsp": "rtsp://172.17.0.1:8554/camera_cam1"
+}
+```
+
+#### Camera Status
+```bash
+GET /cameras/cam1/status
+
+# Response:
+{
+  "camera_id": "cam1",
+  "active": true,
+  "stream_info": {
+    "fps": 25.0,
+    "width": 1280,
+    "height": 720,
+    "connected": true
+  },
+  "processing_info": {
+    "frames_processed": 1500,
+    "frames_sent_ai": 500,
+    "avg_process_time": "45ms"
+  },
+  "webrtc_info": {
+    "session_id": "sess_12345",
+    "active": true,
+    "uptime": "5m30s"
+  }
+}
 ```
 
 ## Example Usage

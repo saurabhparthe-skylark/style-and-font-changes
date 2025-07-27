@@ -93,11 +93,11 @@ func Load(configPath string) (*Config, error) {
 			Resolution: getEnvString("WEBRTC_RESOLUTION", "1280x720"),
 		},
 		MediaMTX: MediaMTXConfig{
-			WHIPEndpoint:    getEnvString("MEDIAMTX_WHIP", "http://localhost:8889"),
-			HLSEndpoint:     getEnvString("MEDIAMTX_HLS", "http://localhost:8888"),
-			RTSPEndpoint:    getEnvString("MEDIAMTX_RTSP", "rtsp://localhost:8554"),
-			APIEndpoint:     getEnvString("MEDIAMTX_API", "http://localhost:9997"),
-			MetricsEndpoint: getEnvString("MEDIAMTX_METRICS", "http://localhost:9998"),
+			WHIPEndpoint:    getEnvString("MEDIAMTX_WHIP", "http://127.0.0.1:8889"),
+			HLSEndpoint:     getEnvString("MEDIAMTX_HLS", "http://127.0.0.1:8888"),
+			RTSPEndpoint:    getEnvString("MEDIAMTX_RTSP", "rtsp://127.0.0.1:8554"),
+			APIEndpoint:     getEnvString("MEDIAMTX_API", "http://127.0.0.1:9997"),
+			MetricsEndpoint: getEnvString("MEDIAMTX_METRICS", "http://127.0.0.1:9998"),
 		},
 	}
 
