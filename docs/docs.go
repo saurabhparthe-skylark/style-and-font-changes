@@ -15,29 +15,6 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/": {
-            "get": {
-                "description": "Get basic worker information and capabilities",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "health"
-                ],
-                "summary": "Worker information",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.WorkerInfoResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/cameras": {
             "get": {
                 "description": "Get list of all cameras and their status",
@@ -108,6 +85,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -149,6 +135,15 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.CameraStatusResponse"
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -188,6 +183,15 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/handlers.CameraResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "404": {
@@ -234,29 +238,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/system/stats": {
-            "get": {
-                "description": "Get system performance metrics and status",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "system"
-                ],
-                "summary": "Get system statistics",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.SystemStatsResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/webrtc/stats": {
             "get": {
                 "description": "Get WebRTC publishing statistics for a camera or all cameras",
@@ -284,6 +265,24 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -326,6 +325,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -352,7 +360,7 @@ const docTemplate = `{
             "properties": {
                 "camera_id": {
                     "type": "string",
-                    "example": "cam1"
+                    "example": "test-camera"
                 },
                 "message": {
                     "type": "string",
@@ -360,11 +368,15 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string",
-                    "example": "active"
+                    "example": "started"
                 },
                 "stream_url": {
                     "type": "string",
-                    "example": "rtsp://camera.example.com/stream"
+                    "example": "rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4"
+                },
+                "timestamp": {
+                    "type": "string",
+                    "example": "2025-07-28T19:45:51Z"
                 }
             }
         },
@@ -377,15 +389,27 @@ const docTemplate = `{
                 },
                 "camera_id": {
                     "type": "string",
-                    "example": "cam1"
+                    "example": "test-camera"
+                },
+                "last_seen": {
+                    "type": "string",
+                    "example": "2025-07-28T19:45:51Z"
                 },
                 "processing_info": {
                     "type": "object",
                     "additionalProperties": true
                 },
+                "status": {
+                    "type": "string",
+                    "example": "running"
+                },
                 "stream_info": {
                     "type": "object",
                     "additionalProperties": true
+                },
+                "uptime": {
+                    "type": "string",
+                    "example": "5m30s"
                 },
                 "webrtc_info": {
                     "type": "object",
@@ -425,7 +449,7 @@ const docTemplate = `{
                 },
                 "stream_url": {
                     "type": "string",
-                    "example": "rtsp://camera.example.com/stream"
+                    "example": "rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4"
                 }
             }
         },
@@ -434,71 +458,19 @@ const docTemplate = `{
             "properties": {
                 "camera_id": {
                     "type": "string",
-                    "example": "cam1"
+                    "example": "test-camera"
                 },
                 "hls": {
                     "type": "string",
-                    "example": "http://172.17.0.1:8888/camera_cam1/index.m3u8"
+                    "example": "http://127.0.0.1:8888/camera_test-camera/index.m3u8"
                 },
                 "rtsp": {
                     "type": "string",
-                    "example": "rtsp://172.17.0.1:8554/camera_cam1"
+                    "example": "rtsp://127.0.0.1:8554/camera_test-camera"
                 },
                 "webrtc": {
                     "type": "string",
-                    "example": "http://172.17.0.1:8889/camera_cam1/whep"
-                }
-            }
-        },
-        "handlers.SystemStatsResponse": {
-            "type": "object",
-            "properties": {
-                "cpu_cores": {
-                    "type": "integer",
-                    "example": 8
-                },
-                "go_version": {
-                    "type": "string",
-                    "example": "go1.21.0"
-                },
-                "goroutines": {
-                    "type": "integer",
-                    "example": 25
-                },
-                "memory_mb": {
-                    "type": "integer",
-                    "example": 45
-                },
-                "uptime": {
-                    "type": "string",
-                    "example": "2h30m15s"
-                },
-                "worker_id": {
-                    "type": "string",
-                    "example": "worker-1"
-                }
-            }
-        },
-        "handlers.WorkerInfoResponse": {
-            "type": "object",
-            "properties": {
-                "capabilities": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "status": {
-                    "type": "string",
-                    "example": "running"
-                },
-                "version": {
-                    "type": "string",
-                    "example": "1.0.0"
-                },
-                "worker_id": {
-                    "type": "string",
-                    "example": "worker-1"
+                    "example": "http://127.0.0.1:8889/camera_test-camera/whep"
                 }
             }
         }

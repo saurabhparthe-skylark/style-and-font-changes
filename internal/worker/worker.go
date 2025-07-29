@@ -113,7 +113,7 @@ func (w *Worker) StartCamera(cameraID, streamURL string, solutions []string) err
 	logger.Info("Starting camera", "stream_url", streamURL, "solutions", solutions)
 
 	// Create stream handler
-	handler, err := stream.NewHandler(streamURL, w.config, logger.WithComponent("stream"))
+	handler, err := stream.NewHandler(streamURL, cameraID, w.config, logger.WithComponent("stream"))
 	if err != nil {
 		return fmt.Errorf("failed to create stream handler: %w", err)
 	}
@@ -137,18 +137,14 @@ func (w *Worker) StartCamera(cameraID, streamURL string, solutions []string) err
 
 	w.cameras[cameraID] = camera
 
-	// Start stream processing in background
-	go w.processCameraStream(camera)
-
-	// Start WebRTC publishing if enabled
-	if w.webrtc != nil {
-		if err := w.webrtc.StartCamera(cameraID, camera.WebRTCPath, processor); err != nil {
-			logger.Error("Failed to start WebRTC publishing", "error", err)
-			// Don't fail the entire camera start for WebRTC issues
-		}
+	// Connect to stream - FFmpeg will handle transcoding to MediaMTX
+	if err := handler.Connect(w.ctx); err != nil {
+		logger.Error("Failed to start FFmpeg transcoding", "error", err)
+		return fmt.Errorf("failed to start transcoding: %w", err)
 	}
 
-	logger.Info("Camera started successfully")
+	destURL := fmt.Sprintf("%s/camera_%s", w.config.MediaMTX.RTSPEndpoint, cameraID)
+	logger.Info("Camera started successfully", "rtsp_dest", destURL)
 	return nil
 }
 
@@ -173,12 +169,7 @@ func (w *Worker) stopCameraUnsafe(cameraID string) error {
 	camera.Active = false
 	camera.mutex.Unlock()
 
-	// Stop WebRTC publishing
-	if w.webrtc != nil {
-		w.webrtc.StopCamera(cameraID)
-	}
-
-	// Close stream handler and processor
+	// Close stream handler (this will stop FFmpeg)
 	camera.Handler.Close()
 	camera.Processor.Close()
 
@@ -217,12 +208,6 @@ func (w *Worker) processCameraStream(camera *CameraInstance) {
 			logger.Error("Camera processing panic", "panic", r)
 		}
 	}()
-
-	// Connect to stream
-	if err := camera.Handler.Connect(w.ctx); err != nil {
-		logger.Error("Failed to connect to stream", "error", err)
-		return
-	}
 
 	frameCount := 0
 

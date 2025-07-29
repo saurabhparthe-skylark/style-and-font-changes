@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
 	"io"
 	"net/http"
 	"sync"
@@ -13,6 +14,10 @@ import (
 	"kepler-worker/internal/config"
 	"kepler-worker/internal/stream"
 	"kepler-worker/pkg/logger"
+
+	"github.com/gen2brain/x264-go"
+	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v3/pkg/media"
 )
 
 type Publisher struct {
@@ -25,13 +30,19 @@ type Publisher struct {
 }
 
 type CameraPublisher struct {
-	CameraID    string
-	StreamPath  string
-	Processor   *stream.FrameProcessor
-	WHIPSession *WHIPSession
-	Active      bool
-	StartTime   time.Time
-	mutex       sync.RWMutex
+	CameraID       string
+	StreamPath     string
+	Processor      *stream.FrameProcessor
+	PeerConnection *webrtc.PeerConnection
+	VideoTrack     *webrtc.TrackLocalStaticSample
+	WHIPSession    *WHIPSession
+	Active         bool
+	StartTime      time.Time
+	encoder        *x264.Encoder
+	encoderBuf     *bytes.Buffer
+	ctx            context.Context
+	cancel         context.CancelFunc
+	mutex          sync.RWMutex
 }
 
 type WHIPSession struct {
@@ -80,7 +91,7 @@ func (p *Publisher) Stop() {
 	p.active = false
 }
 
-func (p *Publisher) StartCamera(cameraID, streamPath string, processor *stream.FrameProcessor) error {
+func (p *Publisher) StartCamera(cameraID, streamPath string, processor *stream.FrameProcessor, width, height int) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -94,31 +105,224 @@ func (p *Publisher) StartCamera(cameraID, streamPath string, processor *stream.F
 		streamPath = fmt.Sprintf("camera_%s", cameraID)
 	}
 
-	whipSession, err := p.createWHIPSession(streamPath)
+	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
-		return fmt.Errorf("failed to create WHIP session: %w", err)
+		return fmt.Errorf("failed to create peer connection: %w", err)
 	}
 
+	videoTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "pion")
+	if err != nil {
+		pc.Close()
+		return fmt.Errorf("failed to add track: %w", err)
+	}
+
+	rtpSender, err := pc.AddTrack(videoTrack)
+	if err != nil {
+		pc.Close()
+		return fmt.Errorf("failed to add track: %w", err)
+	}
+
+	go func() {
+		rtcpBuf := make([]byte, 1500)
+		for {
+			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+				return
+			}
+		}
+	}()
+
+	opts := &x264.Options{
+		Width:     width,
+		Height:    height,
+		FrameRate: int(p.config.WebRTC.TargetFPS),
+		Tune:      "zerolatency",
+		Profile:   "baseline",
+		LogLevel:  x264.LogInfo,
+	}
+
+	buf := new(bytes.Buffer)
+
+	encoder, err := x264.NewEncoder(buf, opts)
+	if err != nil {
+		pc.Close()
+		return fmt.Errorf("failed to create x264 encoder: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 	camPublisher := &CameraPublisher{
-		CameraID:    cameraID,
-		StreamPath:  streamPath,
-		Processor:   processor,
-		WHIPSession: whipSession,
-		Active:      true,
-		StartTime:   time.Now(),
+		CameraID:       cameraID,
+		StreamPath:     streamPath,
+		Processor:      processor,
+		PeerConnection: pc,
+		VideoTrack:     videoTrack,
+		Active:         true,
+		StartTime:      time.Now(),
+		encoder:        encoder,
+		encoderBuf:     buf,
+		ctx:            ctx,
+		cancel:         cancel,
+	}
+
+	offer, err := pc.CreateOffer(nil)
+	if err != nil {
+		pc.Close()
+		cancel()
+		return fmt.Errorf("failed to create offer: %w", err)
+	}
+
+	if err := pc.SetLocalDescription(offer); err != nil {
+		pc.Close()
+		cancel()
+		return fmt.Errorf("failed to set local description: %w", err)
+	}
+
+	whipURL := fmt.Sprintf("%s/%s/whip", p.config.MediaMTX.WHIPEndpoint, streamPath)
+
+	req, err := http.NewRequest("POST", whipURL, bytes.NewReader([]byte(offer.SDP)))
+	if err != nil {
+		pc.Close()
+		cancel()
+		return fmt.Errorf("failed to create WHIP request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/sdp")
+	req.Header.Set("Accept", "application/sdp")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		pc.Close()
+		cancel()
+		return fmt.Errorf("failed to send WHIP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		pc.Close()
+		cancel()
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("WHIP request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	answerSDP, err := io.ReadAll(resp.Body)
+	if err != nil {
+		pc.Close()
+		cancel()
+		return fmt.Errorf("failed to read WHIP response: %w", err)
+	}
+
+	answer := webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: string(answerSDP)}
+	if err := pc.SetRemoteDescription(answer); err != nil {
+		pc.Close()
+		cancel()
+		return fmt.Errorf("failed to set remote description: %w", err)
 	}
 
 	p.cameras[cameraID] = camPublisher
 
-	go p.publishFrames(camPublisher)
+	go p.streamFrames(camPublisher)
 
-	p.logger.Info("WebRTC publishing started",
+	p.logger.Info("WebRTC WHIP publishing started",
 		"camera_id", cameraID,
 		"stream_path", streamPath,
-		"session_id", whipSession.SessionID,
+		"whip_url", whipURL,
 	)
 
 	return nil
+}
+
+func (p *Publisher) streamFrames(camPublisher *CameraPublisher) {
+	ticker := time.NewTicker(time.Second / time.Duration(p.config.WebRTC.TargetFPS))
+	defer ticker.Stop()
+
+	frameCount := 0
+
+	for {
+		select {
+		case <-camPublisher.ctx.Done():
+			return
+		case <-ticker.C:
+			frame, _ := camPublisher.Processor.GetStreamingFrame()
+			if frame == nil {
+				continue
+			}
+
+			frameCount++
+
+			h264Frame, err := p.encodeFrame(camPublisher, frame)
+			if err != nil {
+				p.logger.Error("Failed to encode frame to H264", "camera_id", camPublisher.CameraID, "error", err)
+				continue
+			}
+
+			if len(h264Frame) == 0 {
+				continue // No output from encoder
+			}
+
+			timestamp := time.Now()
+			sample := media.Sample{
+				Data:      h264Frame,
+				Timestamp: timestamp,
+			}
+
+			if err := camPublisher.VideoTrack.WriteSample(sample); err != nil {
+				p.logger.Error("Failed to write sample", "camera_id", camPublisher.CameraID, "error", err)
+				continue
+			}
+
+			if frameCount%150 == 0 {
+				status := "live"
+				p.logger.Info("Frame sent",
+					"camera_id", camPublisher.CameraID,
+					"frame_count", frameCount,
+					"status", status,
+				)
+			}
+		}
+	}
+}
+
+func (p *Publisher) encodeFrame(camPublisher *CameraPublisher, frame *stream.Frame) ([]byte, error) {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil, fmt.Errorf("empty frame data")
+	}
+
+	// Calculate correct plane sizes for YUV420p
+	ySize := frame.Width * frame.Height
+	uvSize := (frame.Width / 2) * (frame.Height / 2)
+
+	// Ensure we have enough data
+	expectedSize := ySize + 2*uvSize
+	if len(frame.Data) < expectedSize {
+		p.logger.Error("Frame data size mismatch",
+			"camera_id", camPublisher.CameraID,
+			"got", len(frame.Data),
+			"expected", expectedSize,
+			"width", frame.Width,
+			"height", frame.Height,
+			"y_size", ySize,
+			"uv_size", uvSize)
+		return nil, fmt.Errorf("insufficient frame data: got %d, expected %d", len(frame.Data), expectedSize)
+	}
+
+	img := &image.YCbCr{
+		Y:              frame.Data[:ySize],
+		Cb:             frame.Data[ySize : ySize+uvSize],
+		Cr:             frame.Data[ySize+uvSize : ySize+2*uvSize],
+		YStride:        frame.Width,
+		CStride:        frame.Width / 2,
+		SubsampleRatio: image.YCbCrSubsampleRatio420,
+		Rect:           image.Rect(0, 0, frame.Width, frame.Height),
+	}
+
+	camPublisher.encoderBuf.Reset()
+	err := camPublisher.encoder.Encode(img)
+	if err != nil {
+		return nil, fmt.Errorf("x264 encoding failed: %w", err)
+	}
+
+	// Don't flush after every frame - only return the current buffer contents
+	return camPublisher.encoderBuf.Bytes(), nil
 }
 
 func (p *Publisher) createWHIPSession(streamPath string) (*WHIPSession, error) {
@@ -280,21 +484,33 @@ func (p *Publisher) stopCameraInternal(cameraID string) error {
 		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	p.logger.Info("Stopping WebRTC for camera", "camera_id", cameraID)
+	p.logger.Info("Stopping WebRTC WHIP publishing for camera", "camera_id", cameraID)
 
 	camPublisher.mutex.Lock()
 	camPublisher.Active = false
 	camPublisher.mutex.Unlock()
 
-	if camPublisher.WHIPSession != nil && camPublisher.WHIPSession.Active {
-		if err := p.deleteWHIPSession(camPublisher.WHIPSession); err != nil {
-			p.logger.Error("Failed to delete WHIP session", "error", err)
+	camPublisher.cancel()
+
+	if camPublisher.encoder != nil {
+		// Flush any remaining frames before closing
+		camPublisher.encoder.Flush()
+		camPublisher.encoder.Close()
+	}
+
+	if camPublisher.PeerConnection != nil {
+		if err := camPublisher.PeerConnection.Close(); err != nil {
+			p.logger.Error("Failed to close peer connection", "error", err)
 		}
+	}
+
+	if camPublisher.WHIPSession != nil {
+		p.deleteWHIPSession(camPublisher.WHIPSession)
 	}
 
 	delete(p.cameras, cameraID)
 
-	p.logger.Info("WebRTC stopped for camera", "camera_id", cameraID)
+	p.logger.Info("WebRTC WHIP publishing stopped for camera", "camera_id", cameraID)
 	return nil
 }
 

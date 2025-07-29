@@ -22,7 +22,6 @@ type Server struct {
 	healthHandler *handlers.HealthHandler
 	cameraHandler *handlers.CameraHandler
 	webrtcHandler *handlers.WebRTCHandler
-	systemHandler *handlers.SystemHandler
 }
 
 func NewServer(cfg *config.Config, w *worker.Worker, publisher *webrtc.Publisher) *Server {
@@ -34,8 +33,7 @@ func NewServer(cfg *config.Config, w *worker.Worker, publisher *webrtc.Publisher
 		router:        router,
 		healthHandler: handlers.NewHealthHandler(cfg.Worker.ID),
 		cameraHandler: handlers.NewCameraHandler(w),
-		webrtcHandler: handlers.NewWebRTCHandler(publisher),
-		systemHandler: handlers.NewSystemHandler(cfg.Worker.ID),
+		webrtcHandler: handlers.NewWebRTCHandler(publisher, cfg),
 	}
 }
 

@@ -87,17 +87,17 @@ func Load(configPath string) (*Config, error) {
 		},
 		WebRTC: WebRTCConfig{
 			Enabled:    getEnvBool("WEBRTC_ENABLED", true),
-			ICEServers: []string{"stun:stun.l.google.com:19302"},
+			ICEServers: []string{"http://127.0.0.1:8201"},
 			TargetFPS:  getEnvInt("WEBRTC_TARGET_FPS", 15),
 			MaxBitrate: getEnvInt("WEBRTC_MAX_BITRATE", 2000000),
 			Resolution: getEnvString("WEBRTC_RESOLUTION", "1280x720"),
 		},
 		MediaMTX: MediaMTXConfig{
-			WHIPEndpoint:    getEnvString("MEDIAMTX_WHIP", "http://127.0.0.1:8889"),
-			HLSEndpoint:     getEnvString("MEDIAMTX_HLS", "http://127.0.0.1:8888"),
-			RTSPEndpoint:    getEnvString("MEDIAMTX_RTSP", "rtsp://127.0.0.1:8554"),
-			APIEndpoint:     getEnvString("MEDIAMTX_API", "http://127.0.0.1:9997"),
-			MetricsEndpoint: getEnvString("MEDIAMTX_METRICS", "http://127.0.0.1:9998"),
+			WHIPEndpoint:    getEnvString("MEDIAMTX_WHIP", "http://localhost:8889"),
+			HLSEndpoint:     getEnvString("MEDIAMTX_HLS", "http://localhost:8888"),
+			RTSPEndpoint:    getEnvString("MEDIAMTX_RTSP", "rtsp://localhost:8554"),
+			APIEndpoint:     getEnvString("MEDIAMTX_API", "http://localhost:9997"),
+			MetricsEndpoint: getEnvString("MEDIAMTX_METRICS", "http://localhost:9998"),
 		},
 	}
 

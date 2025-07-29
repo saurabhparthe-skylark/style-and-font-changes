@@ -12,16 +12,19 @@ definitions:
   handlers.CameraResponse:
     properties:
       camera_id:
-        example: cam1
+        example: test-camera
         type: string
       message:
         example: Camera started successfully
         type: string
       status:
-        example: active
+        example: started
         type: string
       stream_url:
-        example: rtsp://camera.example.com/stream
+        example: rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4
+        type: string
+      timestamp:
+        example: "2025-07-28T19:45:51Z"
         type: string
     type: object
   handlers.CameraStatusResponse:
@@ -30,14 +33,23 @@ definitions:
         example: true
         type: boolean
       camera_id:
-        example: cam1
+        example: test-camera
+        type: string
+      last_seen:
+        example: "2025-07-28T19:45:51Z"
         type: string
       processing_info:
         additionalProperties: true
         type: object
+      status:
+        example: running
+        type: string
       stream_info:
         additionalProperties: true
         type: object
+      uptime:
+        example: 5m30s
+        type: string
       webrtc_info:
         additionalProperties: true
         type: object
@@ -61,7 +73,7 @@ definitions:
           type: string
         type: array
       stream_url:
-        example: rtsp://camera.example.com/stream
+        example: rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mp4
         type: string
     required:
     - solutions
@@ -70,73 +82,21 @@ definitions:
   handlers.StreamURLsResponse:
     properties:
       camera_id:
-        example: cam1
+        example: test-camera
         type: string
       hls:
-        example: http://172.17.0.1:8888/camera_cam1/index.m3u8
+        example: http://127.0.0.1:8888/camera_test-camera/index.m3u8
         type: string
       rtsp:
-        example: rtsp://172.17.0.1:8554/camera_cam1
+        example: rtsp://127.0.0.1:8554/camera_test-camera
         type: string
       webrtc:
-        example: http://172.17.0.1:8889/camera_cam1/whep
-        type: string
-    type: object
-  handlers.SystemStatsResponse:
-    properties:
-      cpu_cores:
-        example: 8
-        type: integer
-      go_version:
-        example: go1.21.0
-        type: string
-      goroutines:
-        example: 25
-        type: integer
-      memory_mb:
-        example: 45
-        type: integer
-      uptime:
-        example: 2h30m15s
-        type: string
-      worker_id:
-        example: worker-1
-        type: string
-    type: object
-  handlers.WorkerInfoResponse:
-    properties:
-      capabilities:
-        items:
-          type: string
-        type: array
-      status:
-        example: running
-        type: string
-      version:
-        example: 1.0.0
-        type: string
-      worker_id:
-        example: worker-1
+        example: http://127.0.0.1:8889/camera_test-camera/whep
         type: string
     type: object
 info:
   contact: {}
 paths:
-  /:
-    get:
-      consumes:
-      - application/json
-      description: Get basic worker information and capabilities
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.WorkerInfoResponse'
-      summary: Worker information
-      tags:
-      - health
   /cameras:
     get:
       consumes:
@@ -182,6 +142,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "500":
           description: Internal Server Error
           schema:
@@ -209,6 +175,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.CameraStatusResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "404":
           description: Not Found
           schema:
@@ -236,6 +208,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/handlers.CameraResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "404":
           description: Not Found
           schema:
@@ -266,21 +244,6 @@ paths:
       summary: Health check
       tags:
       - health
-  /system/stats:
-    get:
-      consumes:
-      - application/json
-      description: Get system performance metrics and status
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.SystemStatsResponse'
-      summary: Get system statistics
-      tags:
-      - system
   /webrtc/{id}/urls:
     get:
       consumes:
@@ -305,6 +268,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       summary: Get stream URLs
       tags:
       - webrtc
@@ -325,6 +294,18 @@ paths:
           description: OK
           schema:
             additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
             type: object
       summary: Get WebRTC statistics
       tags:
