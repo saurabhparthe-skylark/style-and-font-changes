@@ -26,7 +26,6 @@ type CameraManager struct {
 
 	// Pipeline components
 	frameProcessor *FrameProcessor
-	streamManager  *StreamManager
 	publisher      *Publisher
 
 	stopChannel chan struct{}
@@ -58,6 +57,7 @@ type Camera struct {
 	RTSPUrl   string
 	WebRTCUrl string
 	HLSUrl    string
+	MJPEGUrl  string
 }
 
 // RawFrame represents a frame from OpenCV
@@ -115,6 +115,7 @@ type CameraResponse struct {
 	RTSPUrl   string `json:"rtsp_url"`
 	WebRTCUrl string `json:"webrtc_url"`
 	HLSUrl    string `json:"hls_url"`
+	MJPEGUrl  string `json:"mjpeg_url"`
 }
 
 // NewCameraManager creates a new camera manager with full pipeline
@@ -123,11 +124,6 @@ func NewCameraManager(cfg *config.Config, detSvc *detection.Service) (*CameraMan
 	frameProcessor, err := NewFrameProcessor(cfg, detSvc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create frame processor: %w", err)
-	}
-
-	streamManager, err := NewStreamManager(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stream manager: %w", err)
 	}
 
 	publisher, err := NewPublisher(cfg)
@@ -140,7 +136,6 @@ func NewCameraManager(cfg *config.Config, detSvc *detection.Service) (*CameraMan
 		detSvc:         detSvc,
 		cameras:        make(map[string]*Camera),
 		frameProcessor: frameProcessor,
-		streamManager:  streamManager,
 		publisher:      publisher,
 		stopChannel:    make(chan struct{}),
 	}
@@ -190,6 +185,7 @@ func (cm *CameraManager) StartCamera(req *CameraRequest) error {
 		RTSPUrl:   fmt.Sprintf("rtsp://localhost:8554/%s", req.CameraID),
 		WebRTCUrl: fmt.Sprintf("http://localhost:8889/%s/whep", req.CameraID),
 		HLSUrl:    fmt.Sprintf("http://localhost:8888/%s/index.m3u8", req.CameraID),
+		MJPEGUrl:  fmt.Sprintf("http://localhost:%d/mjpeg/%s", cm.cfg.Port, req.CameraID),
 	}
 
 	cm.cameras[req.CameraID] = camera
@@ -255,51 +251,22 @@ func (cm *CameraManager) startVideoCaptureProcess(camera *Camera) error {
 	var cap *gocv.VideoCapture
 	var err error
 
-	// Check if it's a webcam (numeric string like "0", "1", etc.)
-	if camera.URL == "0" || camera.URL == "1" || camera.URL == "2" {
-		// Webcam case
-		deviceID := 0
-		if camera.URL == "1" {
-			deviceID = 1
-		} else if camera.URL == "2" {
-			deviceID = 2
-		}
+	// RTSP case
+	log.Info().
+		Str("camera_id", camera.ID).
+		Str("rtsp_url", camera.URL).
+		Msg("Opening RTSP stream")
 
-		log.Info().
-			Str("camera_id", camera.ID).
-			Int("device_id", deviceID).
-			Msg("Opening webcam device")
-
-		cap, err = gocv.OpenVideoCapture(deviceID)
-		if err != nil {
-			return fmt.Errorf("failed to open webcam %d: %w", deviceID, err)
-		}
-
-		// Set webcam properties
-		cap.Set(gocv.VideoCaptureFrameWidth, float64(cm.cfg.OutputWidth))   // 1280
-		cap.Set(gocv.VideoCaptureFrameHeight, float64(cm.cfg.OutputHeight)) // 720
-		cap.Set(gocv.VideoCaptureFPS, float64(cm.getTargetFPS()))           // 30 or 10
-		cap.Set(gocv.VideoCaptureBufferSize, 1)                             // Minimal buffer
-
-	} else {
-		// RTSP case
-		log.Info().
-			Str("camera_id", camera.ID).
-			Str("rtsp_url", camera.URL).
-			Msg("Opening RTSP stream")
-
-		cap, err = gocv.OpenVideoCapture(camera.URL)
-		if err != nil {
-			return fmt.Errorf("failed to open RTSP stream %s: %w", camera.URL, err)
-		}
-
-		// Set RTSP properties for low latency
-		cap.Set(gocv.VideoCaptureBufferSize, 1) // Minimal buffer
-		cap.Set(gocv.VideoCaptureFrameWidth, float64(cm.cfg.OutputWidth))
-		cap.Set(gocv.VideoCaptureFrameHeight, float64(cm.cfg.OutputHeight))
+	cap, err = gocv.OpenVideoCapture(camera.URL)
+	if err != nil {
+		return fmt.Errorf("failed to open RTSP stream %s: %w", camera.URL, err)
 	}
-
 	defer cap.Close()
+
+	// Set RTSP properties for low latency
+	cap.Set(gocv.VideoCaptureBufferSize, 1) // Minimal buffer
+	cap.Set(gocv.VideoCaptureFrameWidth, float64(cm.cfg.OutputWidth))
+	cap.Set(gocv.VideoCaptureFrameHeight, float64(cm.cfg.OutputHeight))
 
 	if !cap.IsOpened() {
 		return fmt.Errorf("video capture is not opened for camera %s", camera.ID)
@@ -552,6 +519,7 @@ func (cm *CameraManager) GetCamera(cameraID string) (*CameraResponse, error) {
 		RTSPUrl:       camera.RTSPUrl,
 		WebRTCUrl:     camera.WebRTCUrl,
 		HLSUrl:        camera.HLSUrl,
+		MJPEGUrl:      camera.MJPEGUrl,
 	}, nil
 }
 
@@ -602,9 +570,7 @@ func (cm *CameraManager) Shutdown(ctx context.Context) error {
 	if cm.frameProcessor != nil {
 		cm.frameProcessor.Shutdown()
 	}
-	if cm.streamManager != nil {
-		cm.streamManager.Shutdown()
-	}
+
 	if cm.publisher != nil {
 		cm.publisher.Shutdown()
 	}

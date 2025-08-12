@@ -20,13 +20,18 @@ type Publisher struct {
 	// MJPEG latest-frame buffer
 	jpegMutex  sync.RWMutex
 	latestJPEG map[string][]byte
+
+	// Event-driven notification for new frames
+	frameNotify map[string]chan struct{}
+	notifyMutex sync.RWMutex
 }
 
 // NewPublisher creates a new publisher
 func NewPublisher(cfg *config.Config) (*Publisher, error) {
 	p := &Publisher{
-		cfg:        cfg,
-		latestJPEG: make(map[string][]byte),
+		cfg:         cfg,
+		latestJPEG:  make(map[string][]byte),
+		frameNotify: make(map[string]chan struct{}),
 	}
 
 	log.Info().Msg("Publisher initialized (MJPEG only)")
@@ -47,7 +52,11 @@ func (p *Publisher) PublishFrame(frame *ProcessedFrame) error {
 	// Always keep a fresh JPEG for MJPEG streaming
 	if err := p.updateLatestJPEG(frame); err != nil {
 		log.Warn().Err(err).Str("camera_id", frame.CameraID).Msg("Failed to encode JPEG for MJPEG")
+		return nil
 	}
+
+	// Notify any active MJPEG streamers about the new frame
+	p.notifyStreamers(frame.CameraID)
 	return nil
 }
 
@@ -75,7 +84,46 @@ func (p *Publisher) updateLatestJPEG(frame *ProcessedFrame) error {
 	return nil
 }
 
-// StreamMJPEGHTTP streams MJPEG over HTTP for a camera ID
+// notifyStreamers notifies all active streamers for a camera about new frame
+func (p *Publisher) notifyStreamers(cameraID string) {
+	p.notifyMutex.RLock()
+	notify, exists := p.frameNotify[cameraID]
+	p.notifyMutex.RUnlock()
+
+	if exists {
+		// Non-blocking notify (drop if channel full)
+		select {
+		case notify <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// getOrCreateNotifyChannel gets or creates notification channel for camera
+func (p *Publisher) getOrCreateNotifyChannel(cameraID string) chan struct{} {
+	p.notifyMutex.Lock()
+	defer p.notifyMutex.Unlock()
+
+	notify, exists := p.frameNotify[cameraID]
+	if !exists {
+		notify = make(chan struct{}, 5) // Small buffer to avoid blocking publisher
+		p.frameNotify[cameraID] = notify
+	}
+	return notify
+}
+
+// cleanupNotifyChannel removes notification channel when stream ends
+func (p *Publisher) cleanupNotifyChannel(cameraID string) {
+	p.notifyMutex.Lock()
+	defer p.notifyMutex.Unlock()
+
+	if notify, exists := p.frameNotify[cameraID]; exists {
+		close(notify)
+		delete(p.frameNotify, cameraID)
+	}
+}
+
+// StreamMJPEGHTTP streams MJPEG over HTTP for a camera ID with event-driven approach
 func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, cameraID string) {
 	boundary := "frame"
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+boundary)
@@ -88,6 +136,10 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+
+	// Get notification channel for this camera
+	notify := p.getOrCreateNotifyChannel(cameraID)
+	defer p.cleanupNotifyChannel(cameraID)
 
 	writePart := func(jpeg []byte) bool {
 		if _, err := io.WriteString(w, "--"+boundary+"\r\n"); err != nil {
@@ -130,24 +182,34 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 		}
 	}
 
-	// Periodic frame push (can be tuned)
-	ticker := time.NewTicker(time.Second / 15)
-	defer ticker.Stop()
+	// Event-driven frame streaming with keepalive
+	keepaliveTicker := time.NewTicker(2 * time.Second) // Keepalive every 2 seconds
+	defer keepaliveTicker.Stop()
 
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-notify:
+			// New frame available - send it immediately
 			p.jpegMutex.RLock()
 			buf, ok := p.latestJPEG[cameraID]
 			p.jpegMutex.RUnlock()
-			if !ok || len(buf) == 0 {
-				continue
+			if ok && len(buf) > 0 {
+				if !writePart(buf) {
+					return
+				}
 			}
-			if !writePart(buf) {
-				return
+		case <-keepaliveTicker.C:
+			// Keepalive - resend current frame to prevent browser timeout
+			p.jpegMutex.RLock()
+			buf, ok := p.latestJPEG[cameraID]
+			p.jpegMutex.RUnlock()
+			if ok && len(buf) > 0 {
+				if !writePart(buf) {
+					return
+				}
 			}
 		}
 	}
