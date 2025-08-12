@@ -6,108 +6,139 @@ import (
 	"time"
 )
 
-// Config holds all configuration for the worker
 type Config struct {
-	Worker   WorkerConfig   `yaml:"worker"`
-	Stream   StreamConfig   `yaml:"stream"`
-	AI       AIConfig       `yaml:"ai"`
-	WebRTC   WebRTCConfig   `yaml:"webrtc"`
-	MediaMTX MediaMTXConfig `yaml:"mediamtx"`
+	// Application
+	Version     string
+	Environment string
+	WorkerID    string
+	Port        int
+	LogLevel    string
+
+	// External Services
+	MediaMTXURL string
+	BackendURL  string
+	AIGRPCURL   string
+
+	// Streaming Configuration
+	RTSPTimeout       time.Duration
+	MaxRetries        int
+	MaxCameras        int
+	ReconnectInterval time.Duration
+
+	// Frame Processing
+	// When AI is OFF - high FPS for smooth streaming
+	MaxFPSNoAI int
+	// When AI is ON - lower FPS for processing
+	MaxFPSWithAI int
+
+	// Buffer sizes
+	FrameBufferSize  int // Raw frames from OpenCV
+	ProcessingBuffer int // Frames waiting for AI
+	PublishingBuffer int // Frames ready for MediaMTX
+
+	// AI Processing
+	AIEnabled         bool
+	AITimeout         time.Duration
+	AIRetries         int
+	ProcessingWorkers int
+
+	// Stream Output
+	OutputWidth   int
+	OutputHeight  int
+	OutputQuality int
+	OutputBitrate int
+
+	// MediaMTX Publishing
+	WHIPTimeout   time.Duration
+	HLSSegments   int
+	RTSPTransport string
+
+	// Metadata Overlay
+	ShowFPS      bool
+	ShowLatency  bool
+	ShowCameraID bool
+	ShowAIStatus bool
+	ShowMetadata bool
+	OverlayColor string
+	OverlayFont  int
+
+	// WebRTC Configuration
+	WebRTCICEServers []string
+
+	// Health Check
+	HealthCheckInterval time.Duration
+
+	// Graceful Shutdown
+	ShutdownTimeout time.Duration
 }
 
-// WorkerConfig contains worker-specific settings
-type WorkerConfig struct {
-	ID              string        `yaml:"id"`
-	Port            int           `yaml:"port"`
-	MaxCameras      int           `yaml:"max_cameras"`
-	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
-}
+func Load() *Config {
+	return &Config{
+		// Application
+		Version:     getEnv("VERSION", "1.0.0"),
+		Environment: getEnv("ENVIRONMENT", "development"),
+		WorkerID:    getEnv("WORKER_ID", "worker-1"),
+		Port:        getEnvInt("PORT", 8000),
+		LogLevel:    getEnv("LOG_LEVEL", "info"),
 
-// StreamConfig contains RTSP stream settings
-type StreamConfig struct {
-	BufferSize        int           `yaml:"buffer_size"`
-	MaxRetries        int           `yaml:"max_retries"`
-	RetryDelay        time.Duration `yaml:"retry_delay"`
-	ConnectionTimeout time.Duration `yaml:"connection_timeout"`
-	ReadTimeout       time.Duration `yaml:"read_timeout"`
-}
+		// External Services
+		MediaMTXURL: getEnv("MEDIAMTX_URL", "http://localhost:8889"),
+		BackendURL:  getEnv("BACKEND_URL", "http://localhost:8500"),
+		AIGRPCURL:   getEnv("AI_GRPC_URL", "54.89.211.207:50052"),
 
-// AIConfig contains AI processing settings
-type AIConfig struct {
-	Enabled       bool          `yaml:"enabled"`
-	Endpoint      string        `yaml:"endpoint"`
-	ProcessEveryN int           `yaml:"process_every_n"`
-	Timeout       time.Duration `yaml:"timeout"`
-	MaxConcurrent int           `yaml:"max_concurrent"`
-	RetryAttempts int           `yaml:"retry_attempts"`
-}
+		// Streaming Configuration
+		RTSPTimeout:       getEnvDuration("RTSP_TIMEOUT", 10*time.Second),
+		MaxRetries:        getEnvInt("MAX_RETRIES", 3),
+		MaxCameras:        getEnvInt("MAX_CAMERAS", 10),
+		ReconnectInterval: getEnvDuration("RECONNECT_INTERVAL", 5*time.Second),
 
-// WebRTCConfig contains WebRTC publishing settings
-type WebRTCConfig struct {
-	Enabled    bool     `yaml:"enabled"`
-	ICEServers []string `yaml:"ice_servers"`
-	TargetFPS  int      `yaml:"target_fps"`
-	MaxBitrate int      `yaml:"max_bitrate"`
-	Resolution string   `yaml:"resolution"`
-}
+		// Frame Processing
+		MaxFPSNoAI:       getEnvInt("MAX_FPS_NO_AI", 30),
+		MaxFPSWithAI:     getEnvInt("MAX_FPS_WITH_AI", 10),
+		FrameBufferSize:  getEnvInt("FRAME_BUFFER_SIZE", 100),
+		ProcessingBuffer: getEnvInt("PROCESSING_BUFFER_SIZE", 50),
+		PublishingBuffer: getEnvInt("PUBLISHING_BUFFER_SIZE", 20),
 
-// MediaMTXConfig contains MediaMTX server settings
-type MediaMTXConfig struct {
-	WHIPEndpoint    string `yaml:"whip_endpoint"`
-	HLSEndpoint     string `yaml:"hls_endpoint"`
-	RTSPEndpoint    string `yaml:"rtsp_endpoint"`
-	APIEndpoint     string `yaml:"api_endpoint"`
-	MetricsEndpoint string `yaml:"metrics_endpoint"`
-}
+		// AI Processing
+		AIEnabled:         getEnvBool("AI_ENABLED", false),
+		AITimeout:         getEnvDuration("AI_TIMEOUT", 5*time.Second),
+		AIRetries:         getEnvInt("AI_RETRIES", 3),
+		ProcessingWorkers: getEnvInt("PROCESSING_WORKERS", 4),
 
-// Load loads configuration from environment and file
-func Load(configPath string) (*Config, error) {
-	// Default configuration
-	cfg := &Config{
-		Worker: WorkerConfig{
-			ID:              getEnvString("WORKER_ID", "worker-1"),
-			Port:            getEnvInt("WORKER_PORT", 5000),
-			MaxCameras:      getEnvInt("MAX_CAMERAS", 10),
-			ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
+		// Stream Output
+		OutputWidth:   getEnvInt("OUTPUT_WIDTH", 1280),
+		OutputHeight:  getEnvInt("OUTPUT_HEIGHT", 720),
+		OutputQuality: getEnvInt("OUTPUT_QUALITY", 75),   // 0-100
+		OutputBitrate: getEnvInt("OUTPUT_BITRATE", 2000), // kbps
+
+		// MediaMTX Publishing
+		WHIPTimeout:   getEnvDuration("WHIP_TIMEOUT", 10*time.Second),
+		HLSSegments:   getEnvInt("HLS_SEGMENTS", 10),
+		RTSPTransport: getEnv("RTSP_TRANSPORT", "udp"), // "udp", "tcp", "http"
+
+		// Metadata Overlay
+		ShowFPS:      getEnvBool("SHOW_FPS", true),
+		ShowLatency:  getEnvBool("SHOW_LATENCY", false),
+		ShowCameraID: getEnvBool("SHOW_CAMERA_ID", true),
+		ShowAIStatus: getEnvBool("SHOW_AI_STATUS", false),
+		ShowMetadata: getEnvBool("SHOW_METADATA", true),
+		OverlayColor: getEnv("OVERLAY_COLOR", "#FF0000"), // Red
+		OverlayFont:  getEnvInt("OVERLAY_FONT", 2),       // 1-5
+
+		// WebRTC Configuration
+		WebRTCICEServers: []string{
+			"stun:stun.l.google.com:19302",
 		},
-		Stream: StreamConfig{
-			BufferSize:        getEnvInt("STREAM_BUFFER_SIZE", 5),
-			MaxRetries:        getEnvInt("STREAM_MAX_RETRIES", 3),
-			RetryDelay:        getEnvDuration("STREAM_RETRY_DELAY", 2*time.Second),
-			ConnectionTimeout: getEnvDuration("STREAM_CONNECTION_TIMEOUT", 10*time.Second),
-			ReadTimeout:       getEnvDuration("STREAM_READ_TIMEOUT", 5*time.Second),
-		},
-		AI: AIConfig{
-			Enabled:       getEnvBool("AI_ENABLED", true),
-			Endpoint:      getEnvString("AI_ENDPOINT", "localhost:50051"),
-			ProcessEveryN: getEnvInt("AI_PROCESS_EVERY_N", 3),
-			Timeout:       getEnvDuration("AI_TIMEOUT", 10*time.Second),
-			MaxConcurrent: getEnvInt("AI_MAX_CONCURRENT", 2),
-			RetryAttempts: getEnvInt("AI_RETRY_ATTEMPTS", 3),
-		},
-		WebRTC: WebRTCConfig{
-			Enabled:    getEnvBool("WEBRTC_ENABLED", true),
-			ICEServers: []string{"http://127.0.0.1:8201"},
-			TargetFPS:  getEnvInt("WEBRTC_TARGET_FPS", 15),
-			MaxBitrate: getEnvInt("WEBRTC_MAX_BITRATE", 2000000),
-			Resolution: getEnvString("WEBRTC_RESOLUTION", "1280x720"),
-		},
-		MediaMTX: MediaMTXConfig{
-			WHIPEndpoint:    getEnvString("MEDIAMTX_WHIP", "http://localhost:8889"),
-			HLSEndpoint:     getEnvString("MEDIAMTX_HLS", "http://localhost:8888"),
-			RTSPEndpoint:    getEnvString("MEDIAMTX_RTSP", "rtsp://localhost:8554"),
-			APIEndpoint:     getEnvString("MEDIAMTX_API", "http://localhost:9997"),
-			MetricsEndpoint: getEnvString("MEDIAMTX_METRICS", "http://localhost:9998"),
-		},
+
+		// Health Check
+		HealthCheckInterval: getEnvDuration("HEALTH_CHECK_INTERVAL", 30*time.Second),
+
+		// Graceful Shutdown
+		ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
 	}
-
-	// TODO: Add YAML file loading if needed
-
-	return cfg, nil
 }
 
-// Helper functions for environment variables
-func getEnvString(key, defaultValue string) string {
+func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
@@ -116,17 +147,8 @@ func getEnvString(key, defaultValue string) string {
 
 func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
-
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
+		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed
 		}
 	}
 	return defaultValue
@@ -134,8 +156,17 @@ func getEnvBool(key string, defaultValue bool) bool {
 
 func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
-		if duration, err := time.ParseDuration(value); err == nil {
-			return duration
+		if parsed, err := time.ParseDuration(value); err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			return parsed
 		}
 	}
 	return defaultValue
