@@ -13,6 +13,7 @@ import (
 	"gocv.io/x/gocv"
 
 	"kepler-worker-go/internal/config"
+	"kepler-worker-go/internal/models"
 	"kepler-worker-go/internal/services/detection"
 )
 
@@ -21,7 +22,7 @@ type CameraManager struct {
 	cfg    *config.Config
 	detSvc *detection.Service
 
-	cameras map[string]*Camera
+	cameras map[string]*models.Camera
 	mutex   sync.RWMutex
 
 	// Pipeline components
@@ -29,93 +30,6 @@ type CameraManager struct {
 	publisher      *Publisher
 
 	stopChannel chan struct{}
-}
-
-// Camera represents a single camera with its pipeline
-type Camera struct {
-	ID        string
-	URL       string
-	Projects  []string
-	IsActive  bool
-	CreatedAt time.Time
-
-	// Statistics
-	FrameCount    int64
-	ErrorCount    int64
-	LastFrameTime time.Time
-	FPS           float64
-	Latency       time.Duration
-
-	// Pipeline channels
-	rawFrames       chan *RawFrame
-	processedFrames chan *ProcessedFrame
-
-	// Control
-	stopChannel chan struct{}
-
-	// URLs
-	RTSPUrl   string
-	WebRTCUrl string
-	HLSUrl    string
-	MJPEGUrl  string
-}
-
-// RawFrame represents a frame from OpenCV
-type RawFrame struct {
-	CameraID  string
-	Data      []byte
-	Timestamp time.Time
-	FrameID   int64
-	Width     int
-	Height    int
-	Format    string
-}
-
-// ProcessedFrame represents a frame after AI processing and metadata overlay
-type ProcessedFrame struct {
-	CameraID  string
-	Data      []byte
-	Timestamp time.Time
-	FrameID   int64
-	Width     int
-	Height    int
-
-	// Metadata
-	FPS          float64
-	Latency      time.Duration
-	AIEnabled    bool
-	AIDetections interface{} // Will contain detection results
-
-	// Quality
-	Quality int
-	Bitrate int
-}
-
-// CameraRequest for API
-type CameraRequest struct {
-	CameraID string   `json:"camera_id" binding:"required"`
-	URL      string   `json:"url" binding:"required"`
-	Projects []string `json:"projects"`
-}
-
-// CameraResponse for API
-type CameraResponse struct {
-	CameraID      string    `json:"camera_id"`
-	URL           string    `json:"url"`
-	Projects      []string  `json:"projects"`
-	IsActive      bool      `json:"is_active"`
-	CreatedAt     time.Time `json:"created_at"`
-	LastFrameTime time.Time `json:"last_frame_time"`
-	FrameCount    int64     `json:"frame_count"`
-	ErrorCount    int64     `json:"error_count"`
-	FPS           float64   `json:"fps"`
-	Latency       string    `json:"latency"`
-
-	// Streaming URLs
-	RTSPUrl   string `json:"rtsp_url"`
-	WebRTCUrl string `json:"webrtc_url"`
-	HLSUrl    string `json:"hls_url"`
-	MJPEGUrl  string `json:"mjpeg_url"`
 }
 
 // NewCameraManager creates a new camera manager with full pipeline
@@ -134,7 +48,7 @@ func NewCameraManager(cfg *config.Config, detSvc *detection.Service) (*CameraMan
 	cm := &CameraManager{
 		cfg:            cfg,
 		detSvc:         detSvc,
-		cameras:        make(map[string]*Camera),
+		cameras:        make(map[string]*models.Camera),
 		frameProcessor: frameProcessor,
 		publisher:      publisher,
 		stopChannel:    make(chan struct{}),
@@ -151,7 +65,7 @@ func NewCameraManager(cfg *config.Config, detSvc *detection.Service) (*CameraMan
 }
 
 // StartCamera starts a camera with full pipeline
-func (cm *CameraManager) StartCamera(req *CameraRequest) error {
+func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
@@ -169,17 +83,45 @@ func (cm *CameraManager) StartCamera(req *CameraRequest) error {
 		return fmt.Errorf("maximum number of cameras (%d) reached", cm.cfg.MaxCameras)
 	}
 
+	// Configure AI settings with defaults from config
+	aiEnabled := cm.cfg.AIEnabled
+	if req.AIEnabled != nil {
+		aiEnabled = *req.AIEnabled
+	}
+
+	aiEndpoint := cm.cfg.AIGRPCURL
+	if req.AIEndpoint != nil && *req.AIEndpoint != "" {
+		aiEndpoint = *req.AIEndpoint
+	}
+
+	aiTimeout := cm.cfg.AITimeout
+	if req.AITimeout != nil && *req.AITimeout != "" {
+		if parsed, err := time.ParseDuration(*req.AITimeout); err == nil {
+			aiTimeout = parsed
+		} else {
+			log.Warn().
+				Str("camera_id", req.CameraID).
+				Str("invalid_timeout", *req.AITimeout).
+				Msg("Invalid AI timeout format, using default")
+		}
+	}
+
 	// Create camera with pipeline channels
-	camera := &Camera{
+	camera := &models.Camera{
 		ID:        req.CameraID,
 		URL:       req.URL,
 		Projects:  req.Projects,
 		IsActive:  true,
 		CreatedAt: time.Now(),
 
-		rawFrames:       make(chan *RawFrame, cm.cfg.FrameBufferSize),
-		processedFrames: make(chan *ProcessedFrame, cm.cfg.PublishingBuffer),
-		stopChannel:     make(chan struct{}),
+		// AI Configuration
+		AIEnabled:  aiEnabled,
+		AIEndpoint: aiEndpoint,
+		AITimeout:  aiTimeout,
+
+		RawFrames:       make(chan *models.RawFrame, cm.cfg.FrameBufferSize),
+		ProcessedFrames: make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer),
+		StopChannel:     make(chan struct{}),
 
 		// Generate MediaMTX URLs
 		RTSPUrl:   fmt.Sprintf("rtsp://localhost:8554/%s", req.CameraID),
@@ -199,16 +141,20 @@ func (cm *CameraManager) StartCamera(req *CameraRequest) error {
 		Str("camera_id", req.CameraID).
 		Str("url", req.URL).
 		Strs("projects", req.Projects).
+		Bool("ai_enabled", camera.AIEnabled).
+		Str("ai_endpoint", camera.AIEndpoint).
+		Dur("ai_timeout", camera.AITimeout).
 		Str("rtsp_url", camera.RTSPUrl).
 		Str("webrtc_url", camera.WebRTCUrl).
 		Str("hls_url", camera.HLSUrl).
-		Msg("Camera started with full enterprise pipeline")
+		Str("mjpeg_url", camera.MJPEGUrl).
+		Msg("Camera started with full enterprise pipeline and AI configuration")
 
 	return nil
 }
 
 // runStreamReader runs OpenCV VideoCapture to read RTSP stream
-func (cm *CameraManager) runStreamReader(camera *Camera) {
+func (cm *CameraManager) runStreamReader(camera *models.Camera) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
@@ -220,7 +166,7 @@ func (cm *CameraManager) runStreamReader(camera *Camera) {
 
 	for {
 		select {
-		case <-camera.stopChannel:
+		case <-camera.StopChannel:
 			return
 		default:
 			err := cm.startVideoCaptureProcess(camera)
@@ -230,7 +176,7 @@ func (cm *CameraManager) runStreamReader(camera *Camera) {
 
 				// Wait before retry
 				select {
-				case <-camera.stopChannel:
+				case <-camera.StopChannel:
 					return
 				case <-time.After(cm.cfg.ReconnectInterval):
 					continue
@@ -241,7 +187,7 @@ func (cm *CameraManager) runStreamReader(camera *Camera) {
 }
 
 // startVideoCaptureProcess starts OpenCV VideoCapture similar
-func (cm *CameraManager) startVideoCaptureProcess(camera *Camera) error {
+func (cm *CameraManager) startVideoCaptureProcess(camera *models.Camera) error {
 	log.Info().
 		Str("camera_id", camera.ID).
 		Str("url", camera.URL).
@@ -294,7 +240,7 @@ func (cm *CameraManager) startVideoCaptureProcess(camera *Camera) error {
 
 	for {
 		select {
-		case <-camera.stopChannel:
+		case <-camera.StopChannel:
 			log.Info().Str("camera_id", camera.ID).Msg("Stopping VideoCapture reader due to stop signal")
 			return nil
 		default:
@@ -346,7 +292,7 @@ func (cm *CameraManager) startVideoCaptureProcess(camera *Camera) error {
 			frameData := processedImg.ToBytes()
 			processedImg.Close()
 
-			rawFrame := &RawFrame{
+			rawFrame := &models.RawFrame{
 				CameraID:  camera.ID,
 				Data:      frameData,
 				Timestamp: time.Now(),
@@ -358,17 +304,17 @@ func (cm *CameraManager) startVideoCaptureProcess(camera *Camera) error {
 
 			// Send to processing pipeline
 			select {
-			case camera.rawFrames <- rawFrame:
+			case camera.RawFrames <- rawFrame:
 				log.Debug().
 					Str("camera_id", camera.ID).
 					Int64("frame_id", frameID).
 					Msg("Frame sent to processing pipeline")
 			default:
 
-				log.Warn().
-					Str("camera_id", camera.ID).
-					Int64("frame_id", frameID).
-					Msg("Dropped raw frame - processing buffer full")
+				// log.Warn().
+				// 	Str("camera_id", camera.ID).
+				// 	Int64("frame_id", frameID).
+				// 	Msg("Dropped raw frame - processing buffer full")
 			}
 
 			targetInterval := time.Second / time.Duration(cm.getTargetFPS())
@@ -378,7 +324,7 @@ func (cm *CameraManager) startVideoCaptureProcess(camera *Camera) error {
 }
 
 // runFrameProcessor processes frames through AI and adds metadata
-func (cm *CameraManager) runFrameProcessor(camera *Camera) {
+func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
@@ -388,21 +334,79 @@ func (cm *CameraManager) runFrameProcessor(camera *Camera) {
 		}
 	}()
 
+	// Create per-camera detection service if AI is enabled for this camera
+	var detSvc *detection.Service
+	if camera.AIEnabled && camera.AIEndpoint != "" {
+		var err error
+		detSvc, err = detection.NewService(camera.AIEndpoint)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("camera_id", camera.ID).
+				Str("ai_endpoint", camera.AIEndpoint).
+				Msg("Failed to create detection service for camera, AI will be disabled")
+			camera.AIEnabled = false
+		} else {
+			log.Info().
+				Str("camera_id", camera.ID).
+				Str("ai_endpoint", camera.AIEndpoint).
+				Msg("AI detection service initialized for camera")
+		}
+	}
+
+	// Create per-camera frame processor with AI service
+	frameProcessor, err := NewFrameProcessorWithDetectionService(cm.cfg, detSvc, camera)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("camera_id", camera.ID).
+			Msg("Failed to create frame processor for camera")
+		return
+	}
+	defer frameProcessor.Shutdown()
+
 	for {
 		select {
-		case <-camera.stopChannel:
+		case <-camera.StopChannel:
+			if detSvc != nil {
+				detSvc.Shutdown(context.Background())
+			}
 			return
-		case rawFrame := <-camera.rawFrames:
+		case rawFrame := <-camera.RawFrames:
+			startTime := time.Now()
+
 			// Update camera statistics first
 			camera.FPS = cm.calculateFPS(camera)
 			camera.Latency = time.Since(rawFrame.Timestamp)
 
-			// Process frame with current stats
-			processedFrame := cm.frameProcessor.ProcessFrame(rawFrame, camera.Projects, camera.FPS, camera.Latency)
+			// Process frame with current stats and per-camera AI settings
+			processedFrame := frameProcessor.ProcessFrame(rawFrame, camera.Projects, camera.FPS, camera.Latency)
+
+			// Update camera AI statistics
+			if processedFrame.AIDetections != nil {
+				if aiResult, ok := processedFrame.AIDetections.(*AIProcessingResult); ok {
+					camera.AIProcessingTime = aiResult.ProcessingTime
+					camera.AIDetectionCount += int64(len(aiResult.Detections))
+
+					if aiResult.ErrorMessage != "" {
+						camera.LastAIError = aiResult.ErrorMessage
+						camera.ErrorCount++
+					} else if aiResult.FrameProcessed {
+						camera.LastAIError = "" // Clear error on successful processing
+					}
+				}
+			}
+
+			processingTime := time.Since(startTime)
+			log.Debug().
+				Str("camera_id", camera.ID).
+				Dur("processing_time", processingTime).
+				Bool("ai_enabled", camera.AIEnabled).
+				Msg("Frame processed")
 
 			// Send to publisher
 			select {
-			case camera.processedFrames <- processedFrame:
+			case camera.ProcessedFrames <- processedFrame:
 			default:
 				log.Warn().Str("camera_id", camera.ID).Msg("Dropped processed frame - buffer full")
 			}
@@ -411,7 +415,7 @@ func (cm *CameraManager) runFrameProcessor(camera *Camera) {
 }
 
 // runPublisher publishes frames to MediaMTX
-func (cm *CameraManager) runPublisher(camera *Camera) {
+func (cm *CameraManager) runPublisher(camera *models.Camera) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
@@ -423,9 +427,9 @@ func (cm *CameraManager) runPublisher(camera *Camera) {
 
 	for {
 		select {
-		case <-camera.stopChannel:
+		case <-camera.StopChannel:
 			return
-		case processedFrame := <-camera.processedFrames:
+		case processedFrame := <-camera.ProcessedFrames:
 			err := cm.publisher.PublishFrame(processedFrame)
 			if err != nil {
 				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish frame")
@@ -449,7 +453,7 @@ func (cm *CameraManager) getTargetFPS() int {
 }
 
 // calculateFPS calculates current FPS for a camera
-func (cm *CameraManager) calculateFPS(camera *Camera) float64 {
+func (cm *CameraManager) calculateFPS(camera *models.Camera) float64 {
 	// Simple FPS calculation - can be improved with moving average
 	if camera.FrameCount < 2 {
 		return 0
@@ -480,7 +484,7 @@ func (cm *CameraManager) StopCamera(cameraID string) error {
 }
 
 // stopCameraInternal stops camera internal processes
-func (cm *CameraManager) stopCameraInternal(camera *Camera) {
+func (cm *CameraManager) stopCameraInternal(camera *models.Camera) {
 	if camera == nil {
 		return
 	}
@@ -488,15 +492,15 @@ func (cm *CameraManager) stopCameraInternal(camera *Camera) {
 	camera.IsActive = false
 
 	// Stop all processes
-	close(camera.stopChannel)
+	close(camera.StopChannel)
 
 	// Close channels
-	close(camera.rawFrames)
-	close(camera.processedFrames)
+	close(camera.RawFrames)
+	close(camera.ProcessedFrames)
 }
 
 // GetCamera returns camera information
-func (cm *CameraManager) GetCamera(cameraID string) (*CameraResponse, error) {
+func (cm *CameraManager) GetCamera(cameraID string) (*models.CameraResponse, error) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
@@ -505,7 +509,7 @@ func (cm *CameraManager) GetCamera(cameraID string) (*CameraResponse, error) {
 		return nil, fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	return &CameraResponse{
+	return &models.CameraResponse{
 		CameraID:      camera.ID,
 		URL:           camera.URL,
 		Projects:      camera.Projects,
@@ -516,19 +520,28 @@ func (cm *CameraManager) GetCamera(cameraID string) (*CameraResponse, error) {
 		ErrorCount:    camera.ErrorCount,
 		FPS:           camera.FPS,
 		Latency:       camera.Latency.String(),
-		RTSPUrl:       camera.RTSPUrl,
-		WebRTCUrl:     camera.WebRTCUrl,
-		HLSUrl:        camera.HLSUrl,
-		MJPEGUrl:      camera.MJPEGUrl,
+
+		// AI Configuration
+		AIEnabled:        camera.AIEnabled,
+		AIEndpoint:       camera.AIEndpoint,
+		AITimeout:        camera.AITimeout.String(),
+		AIProcessingTime: camera.AIProcessingTime.String(),
+		LastAIError:      camera.LastAIError,
+		AIDetectionCount: camera.AIDetectionCount,
+
+		RTSPUrl:   camera.RTSPUrl,
+		WebRTCUrl: camera.WebRTCUrl,
+		HLSUrl:    camera.HLSUrl,
+		MJPEGUrl:  camera.MJPEGUrl,
 	}, nil
 }
 
 // ListCameras returns all cameras
-func (cm *CameraManager) ListCameras() []*CameraResponse {
+func (cm *CameraManager) ListCameras() []*models.CameraResponse {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
-	cameras := make([]*CameraResponse, 0, len(cm.cameras))
+	cameras := make([]*models.CameraResponse, 0, len(cm.cameras))
 	for _, camera := range cm.cameras {
 		resp, _ := cm.GetCamera(camera.ID)
 		if resp != nil {
@@ -563,7 +576,7 @@ func (cm *CameraManager) Shutdown(ctx context.Context) error {
 	for _, camera := range cm.cameras {
 		cm.stopCameraInternal(camera)
 	}
-	cm.cameras = make(map[string]*Camera)
+	cm.cameras = make(map[string]*models.Camera)
 	cm.mutex.Unlock()
 
 	// Shutdown pipeline components
@@ -586,4 +599,94 @@ func (cm *CameraManager) PublisherStreamMJPEG(w http.ResponseWriter, r *http.Req
 		return
 	}
 	cm.publisher.StreamMJPEGHTTP(w, r, cameraID)
+}
+
+// UpdateCameraAI updates AI configuration for a specific camera
+func (cm *CameraManager) UpdateCameraAI(cameraID string, req *models.AIConfigRequest) error {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	camera, exists := cm.cameras[cameraID]
+	if !exists {
+		return fmt.Errorf("camera not found")
+	}
+
+	// Update AI enabled flag
+	if req.AIEnabled != nil {
+		camera.AIEnabled = *req.AIEnabled
+	}
+
+	// Update AI endpoint
+	if req.AIEndpoint != nil && *req.AIEndpoint != "" {
+		camera.AIEndpoint = *req.AIEndpoint
+	}
+
+	// Update AI timeout
+	if req.AITimeout != nil && *req.AITimeout != "" {
+		if parsed, err := time.ParseDuration(*req.AITimeout); err == nil {
+			camera.AITimeout = parsed
+		} else {
+			log.Warn().
+				Str("camera_id", cameraID).
+				Str("invalid_timeout", *req.AITimeout).
+				Msg("Invalid AI timeout format, keeping current value")
+		}
+	}
+
+	// Update projects
+	if req.Projects != nil {
+		camera.Projects = req.Projects
+	}
+
+	log.Info().
+		Str("camera_id", cameraID).
+		Bool("ai_enabled", camera.AIEnabled).
+		Str("ai_endpoint", camera.AIEndpoint).
+		Dur("ai_timeout", camera.AITimeout).
+		Strs("projects", camera.Projects).
+		Msg("Camera AI configuration updated")
+
+	return nil
+}
+
+// GetCameraAI gets AI configuration for a specific camera
+func (cm *CameraManager) GetCameraAI(cameraID string) (*models.AIConfigResponse, error) {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+
+	camera, exists := cm.cameras[cameraID]
+	if !exists {
+		return nil, fmt.Errorf("camera not found")
+	}
+
+	return &models.AIConfigResponse{
+		CameraID:         camera.ID,
+		AIEnabled:        camera.AIEnabled,
+		AIEndpoint:       camera.AIEndpoint,
+		AITimeout:        camera.AITimeout.String(),
+		Projects:         camera.Projects,
+		AIProcessingTime: camera.AIProcessingTime.String(),
+		LastAIError:      camera.LastAIError,
+		AIDetectionCount: camera.AIDetectionCount,
+	}, nil
+}
+
+// ToggleCameraAI toggles AI processing for a specific camera
+func (cm *CameraManager) ToggleCameraAI(cameraID string) error {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	camera, exists := cm.cameras[cameraID]
+	if !exists {
+		return fmt.Errorf("camera not found")
+	}
+
+	camera.AIEnabled = !camera.AIEnabled
+
+	log.Info().
+		Str("camera_id", cameraID).
+		Bool("ai_enabled", camera.AIEnabled).
+		Msg("Camera AI toggled")
+
+	return nil
 }

@@ -92,6 +92,11 @@ func (s *Server) setupRoutes() {
 		cameraGroup.GET("", cameraHandler.ListCameras)
 		cameraGroup.GET("/:camera_id", cameraHandler.GetCamera)
 		cameraGroup.GET("/stats", cameraHandler.GetCameraStats)
+
+		// AI configuration endpoints
+		cameraGroup.GET("/:camera_id/ai", cameraHandler.GetCameraAI)
+		cameraGroup.PUT("/:camera_id/ai", cameraHandler.UpdateCameraAI)
+		cameraGroup.POST("/:camera_id/ai/toggle", cameraHandler.ToggleCameraAI)
 	}
 
 	// MJPEG streaming endpoint

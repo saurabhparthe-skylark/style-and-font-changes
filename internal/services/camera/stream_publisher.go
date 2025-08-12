@@ -11,6 +11,7 @@ import (
 	"gocv.io/x/gocv"
 
 	"kepler-worker-go/internal/config"
+	"kepler-worker-go/internal/models"
 )
 
 // Publisher handles MJPEG publishing of frames
@@ -39,7 +40,7 @@ func NewPublisher(cfg *config.Config) (*Publisher, error) {
 }
 
 // PublishFrame ingests a processed frame; updates MJPEG buffer
-func (p *Publisher) PublishFrame(frame *ProcessedFrame) error {
+func (p *Publisher) PublishFrame(frame *models.ProcessedFrame) error {
 	log.Debug().
 		Str("camera_id", frame.CameraID).
 		Int64("frame_id", frame.FrameID).
@@ -61,7 +62,7 @@ func (p *Publisher) PublishFrame(frame *ProcessedFrame) error {
 }
 
 // updateLatestJPEG encodes frame to JPEG and stores it for MJPEG
-func (p *Publisher) updateLatestJPEG(frame *ProcessedFrame) error {
+func (p *Publisher) updateLatestJPEG(frame *models.ProcessedFrame) error {
 	mat, err := gocv.NewMatFromBytes(frame.Height, frame.Width, gocv.MatTypeCV8UC3, frame.Data)
 	if err != nil {
 		return fmt.Errorf("failed to create Mat from frame data: %w", err)

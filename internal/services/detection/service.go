@@ -80,6 +80,7 @@ func (s *Service) ProcessFrame(ctx context.Context, req *pb.FrameRequest) (*pb.D
 	}
 
 	resp, err := s.client.InferDetection(ctx, req)
+	log.Debug().Msgf("Detection response: %v", resp)
 	if err != nil {
 		s.isHealthy = false
 		return nil, err
