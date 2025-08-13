@@ -119,6 +119,11 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		AIEndpoint: aiEndpoint,
 		AITimeout:  aiTimeout,
 
+		// FPS Calculation setup
+		RecentFrameTimes: make([]time.Time, 0, 30), // Keep last 30 frame timestamps
+		FPSWindowSize:    30,                       // Use 30 frames for FPS calculation
+		AIFrameCounter:   0,                        // Initialize AI frame counter
+
 		RawFrames:       make(chan *models.RawFrame, cm.cfg.FrameBufferSize),
 		ProcessedFrames: make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer),
 		StopChannel:     make(chan struct{}),
@@ -524,17 +529,33 @@ func (cm *CameraManager) getTargetFPS() int {
 	return cm.cfg.MaxFPSNoAI
 }
 
-// calculateFPS calculates current FPS for a camera
+// calculateFPS calculates current FPS for a camera using rolling window
 func (cm *CameraManager) calculateFPS(camera *models.Camera) float64 {
-	// Simple FPS calculation - can be improved with moving average
 	if camera.FrameCount < 2 {
 		return 0
 	}
 
-	elapsed := time.Since(camera.CreatedAt).Seconds()
-	if elapsed > 0 {
-		return float64(camera.FrameCount) / elapsed
+	// Add current timestamp to the rolling window
+	now := time.Now()
+	camera.RecentFrameTimes = append(camera.RecentFrameTimes, now)
+
+	// Keep only the most recent N timestamps
+	if len(camera.RecentFrameTimes) > camera.FPSWindowSize {
+		camera.RecentFrameTimes = camera.RecentFrameTimes[1:]
 	}
+
+	// Need at least 2 timestamps to calculate FPS
+	if len(camera.RecentFrameTimes) < 2 {
+		return 0
+	}
+
+	// Calculate FPS based on time difference between first and last timestamp in window
+	timeSpan := camera.RecentFrameTimes[len(camera.RecentFrameTimes)-1].Sub(camera.RecentFrameTimes[0]).Seconds()
+	if timeSpan > 0 {
+		frameCount := float64(len(camera.RecentFrameTimes) - 1)
+		return frameCount / timeSpan
+	}
+
 	return 0
 }
 

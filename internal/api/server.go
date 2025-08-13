@@ -82,6 +82,16 @@ func (s *Server) setupRoutes() {
 		})
 	})
 
+	// Worker info endpoint - simplified
+	s.router.GET("/worker/info", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"worker_id":  s.cfg.WorkerID,
+			"version":    s.cfg.Version,
+			"port":       s.cfg.Port,
+			"ai_enabled": s.cfg.AIEnabled,
+		})
+	})
+
 	// Camera management endpoints
 	cameraHandler := handlers.NewCameraHandler(s.container.CameraManager)
 	cameraGroup := s.router.Group("cameras")
@@ -107,19 +117,10 @@ func (s *Server) setupRoutes() {
 		s.container.CameraManager.PublisherStreamMJPEG(c.Writer, c.Request, cameraID)
 	})
 
-	// Worker info endpoint - simplified
-	s.router.GET("/worker/info", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"worker_id":  s.cfg.WorkerID,
-			"version":    s.cfg.Version,
-			"port":       s.cfg.Port,
-			"ai_enabled": s.cfg.AIEnabled,
-		})
-	})
-
-	// Swagger documentation
+	// Swagger documentation with configurable host
+	swaggerURL := fmt.Sprintf("http://%s:%d/swagger/doc.json", s.cfg.SwaggerHost, s.cfg.SwaggerPort)
 	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler,
-		ginSwagger.URL("/swagger/doc.json"),
+		ginSwagger.URL(swaggerURL),
 		ginSwagger.DefaultModelsExpandDepth(-1)))
 }
 
@@ -135,7 +136,6 @@ func (s *Server) setupRoutes() {
 // @license.name Apache 2.0
 // @license.url http://www.apache.org/licenses/LICENSE-2.0.html
 
-// @host localhost:8000
 // @BasePath /
 // @schemes http
 
@@ -144,6 +144,9 @@ func (s *Server) Start() error {
 		Str("worker_id", s.cfg.WorkerID).
 		Int("port", s.cfg.Port).
 		Bool("ai_enabled", s.cfg.AIEnabled).
+		Str("swagger_host", s.cfg.SwaggerHost).
+		Int("swagger_port", s.cfg.SwaggerPort).
+		Int("ai_frame_interval", s.cfg.AIFrameInterval).
 		Msg("Starting Kepler Worker server with enterprise pipeline")
 
 	return s.server.ListenAndServe()

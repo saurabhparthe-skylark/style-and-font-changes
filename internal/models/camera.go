@@ -22,10 +22,15 @@ type Camera struct {
 	FPS           float64
 	Latency       time.Duration
 
+	// FPS Calculation (rolling window)
+	RecentFrameTimes []time.Time // Keep last N frame timestamps for accurate FPS
+	FPSWindowSize    int         // Number of frames to use for FPS calculation
+
 	// AI Processing Stats
 	AIProcessingTime time.Duration
 	LastAIError      string
 	AIDetectionCount int64
+	AIFrameCounter   int64 // Counter for Nth frame processing
 
 	// Pipeline channels
 	RawFrames       chan *RawFrame

@@ -17,6 +17,11 @@ type Config struct {
 	Port        int
 	LogLevel    string
 
+	// Logdy (lightweight web log viewer)
+	LogdyEnabled bool
+	LogdyHost    string
+	LogdyPort    int
+
 	// External Services
 	MediaMTXURL string
 	BackendURL  string
@@ -44,6 +49,7 @@ type Config struct {
 	AITimeout         time.Duration
 	AIRetries         int
 	ProcessingWorkers int
+	AIFrameInterval   int // Process every Nth frame for AI (1 = every frame, 2 = every 2nd frame, etc.)
 
 	// Stream Output
 	OutputWidth   int
@@ -55,6 +61,10 @@ type Config struct {
 	WHIPTimeout   time.Duration
 	HLSSegments   int
 	RTSPTransport string
+
+	// Swagger Configuration
+	SwaggerHost string
+	SwaggerPort int
 
 	// Metadata Overlay
 	ShowFPS      bool
@@ -91,6 +101,11 @@ func Load() *Config {
 		Port:        getEnvInt("PORT", 8000),
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
 
+		// Logdy (lightweight web log viewer)
+		LogdyEnabled: getEnvBool("LOGDY_ENABLED", true),
+		LogdyHost:    getEnv("LOGDY_HOST", "127.0.0.1"),
+		LogdyPort:    getEnvInt("LOGDY_PORT", 8080),
+
 		// External Services
 		MediaMTXURL: getEnv("MEDIAMTX_URL", "http://localhost:8889"),
 		BackendURL:  getEnv("BACKEND_URL", "http://localhost:8500"),
@@ -114,6 +129,7 @@ func Load() *Config {
 		AITimeout:         getEnvDuration("AI_TIMEOUT", 5*time.Second),
 		AIRetries:         getEnvInt("AI_RETRIES", 3),
 		ProcessingWorkers: getEnvInt("PROCESSING_WORKERS", 4),
+		AIFrameInterval:   getEnvInt("AI_FRAME_INTERVAL", 1), // Process every 3rd frame by default
 
 		// Stream Output
 		OutputWidth:   getEnvInt("OUTPUT_WIDTH", 1280),
@@ -125,6 +141,10 @@ func Load() *Config {
 		WHIPTimeout:   getEnvDuration("WHIP_TIMEOUT", 10*time.Second),
 		HLSSegments:   getEnvInt("HLS_SEGMENTS", 10),
 		RTSPTransport: getEnv("RTSP_TRANSPORT", "udp"), // "udp", "tcp", "http"
+
+		// Swagger Configuration
+		SwaggerHost: getEnv("SWAGGER_HOST", "localhost"),
+		SwaggerPort: getEnvInt("SWAGGER_PORT", 8000), // Use same as main port by default
 
 		// Metadata Overlay
 		ShowFPS:      getEnvBool("SHOW_FPS", true),

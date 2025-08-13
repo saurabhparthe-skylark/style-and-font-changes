@@ -104,10 +104,13 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 	// Determine AI settings - use per-camera if available, otherwise fall back to global config
 	aiEnabled := fp.cfg.AIEnabled
 	aiTimeout := fp.cfg.AITimeout
+	aiFrameInterval := fp.cfg.AIFrameInterval
 
 	if fp.camera != nil {
 		aiEnabled = fp.camera.AIEnabled
 		aiTimeout = fp.camera.AITimeout
+		// Increment AI frame counter for this camera
+		fp.camera.AIFrameCounter++
 	}
 
 	// Create ProcessedFrame with current metadata
@@ -133,8 +136,34 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 		FrameProcessed: false,
 	}
 
-	// Process with AI if enabled and projects are configured
-	if aiEnabled && len(projects) > 0 && fp.detSvc != nil {
+	// Check if this frame should be processed by AI (Nth frame logic)
+	shouldProcessAI := aiEnabled && len(projects) > 0 && fp.detSvc != nil
+	if shouldProcessAI {
+		if fp.camera != nil {
+			// Only process every Nth frame for AI when per-camera tracking is available
+			shouldProcessAI = (fp.camera.AIFrameCounter % int64(aiFrameInterval)) == 0
+
+			log.Debug().
+				Str("camera_id", rawFrame.CameraID).
+				Int64("ai_frame_counter", fp.camera.AIFrameCounter).
+				Int("ai_frame_interval", aiFrameInterval).
+				Bool("will_process_ai", shouldProcessAI).
+				Msg("AI frame interval check with per-camera tracking")
+		} else {
+			// Fallback: when no per-camera context, use frame ID for interval
+			shouldProcessAI = (rawFrame.FrameID % int64(aiFrameInterval)) == 0
+
+			log.Debug().
+				Str("camera_id", rawFrame.CameraID).
+				Int64("frame_id", rawFrame.FrameID).
+				Int("ai_frame_interval", aiFrameInterval).
+				Bool("will_process_ai", shouldProcessAI).
+				Msg("AI frame interval check with frame ID fallback")
+		}
+	}
+
+	// Process with AI if conditions are met
+	if shouldProcessAI {
 		startTime := time.Now()
 		aiResult = fp.processFrameWithAI(rawFrame, projects, aiTimeout)
 		aiResult.ProcessingTime = time.Since(startTime)
@@ -144,6 +173,12 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 			Int("detection_count", len(aiResult.Detections)).
 			Dur("processing_time", aiResult.ProcessingTime).
 			Bool("frame_processed", aiResult.FrameProcessed).
+			Int64("ai_frame_counter", func() int64 {
+				if fp.camera != nil {
+					return fp.camera.AIFrameCounter
+				}
+				return rawFrame.FrameID
+			}()).
 			Msg("AI processing completed")
 	}
 
@@ -179,7 +214,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 
 	// Use high-quality JPEG encoding to minimize quality loss
 	// Set JPEG quality to 95% to maintain color fidelity
-	buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, mat, []int{gocv.IMWriteJpegQuality})
+	buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, mat, []int{gocv.IMWriteJpegQuality, 95})
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("Failed to encode frame as JPEG: %v", err)
 		log.Error().
