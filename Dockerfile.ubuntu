@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y \
     libopencv-objdetect4.5d \
     libopencv-video4.5d \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -62,5 +63,7 @@ RUN chown kepler:kepler /app/kepler-worker
 USER kepler
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=3s --retries=3 CMD curl -fsS http://localhost:8080/health || exit 1
 
 CMD ["./kepler-worker"] 

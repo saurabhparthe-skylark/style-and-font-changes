@@ -17,7 +17,7 @@ func Logger() gin.HandlerFunc {
 			Dur("latency", param.Latency).
 			Str("client_ip", param.ClientIP).
 			Str("user_agent", param.Request.UserAgent()).
-			Msg("HTTP Request")
+			Msg("http_request")
 		return ""
 	})
 }
@@ -28,12 +28,8 @@ func Recovery() gin.HandlerFunc {
 			Interface("error", recovered).
 			Str("path", c.Request.URL.Path).
 			Str("method", c.Request.Method).
-			Msg("Panic recovered")
-
-		c.JSON(500, gin.H{
-			"error":   "Internal server error",
-			"message": "An unexpected error occurred",
-		})
+			Msg("panic_recovered")
+		c.JSON(500, gin.H{"error": "Internal server error"})
 	})
 }
 
@@ -44,12 +40,10 @@ func CORS() gin.HandlerFunc {
 		c.Header("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-CSRF-Token, X-Request-ID, X-Requested-With")
 		c.Header("Access-Control-Allow-Credentials", "true")
 		c.Header("Access-Control-Expose-Headers", "Content-Length, X-Request-ID")
-
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return
 		}
-
 		c.Next()
 	}
 }
@@ -60,9 +54,15 @@ func RequestID() gin.HandlerFunc {
 		if requestID == "" {
 			requestID = generateRequestID()
 		}
-
 		c.Header("X-Request-ID", requestID)
 		c.Set("request_id", requestID)
+		c.Next()
+	}
+}
+
+func RequestContext() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set("start_time", time.Now())
 		c.Next()
 	}
 }
@@ -76,6 +76,4 @@ func generateRequestID() string {
 	return string(b)
 }
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
+func init() { rand.Seed(time.Now().UnixNano()) }

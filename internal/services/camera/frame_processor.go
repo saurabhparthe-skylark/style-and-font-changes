@@ -148,7 +148,7 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 				Int64("ai_frame_counter", fp.camera.AIFrameCounter).
 				Int("ai_frame_interval", aiFrameInterval).
 				Bool("will_process_ai", shouldProcessAI).
-				Msg("AI frame interval check with per-camera tracking")
+				Msg("ai_frame_interval_check")
 		} else {
 			// Fallback: when no per-camera context, use frame ID for interval
 			shouldProcessAI = (rawFrame.FrameID % int64(aiFrameInterval)) == 0
@@ -158,7 +158,7 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 				Int64("frame_id", rawFrame.FrameID).
 				Int("ai_frame_interval", aiFrameInterval).
 				Bool("will_process_ai", shouldProcessAI).
-				Msg("AI frame interval check with frame ID fallback")
+				Msg("ai_frame_interval_check")
 		}
 	}
 
@@ -179,7 +179,7 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 				}
 				return rawFrame.FrameID
 			}()).
-			Msg("AI processing completed")
+			Msg("ai_processing_completed")
 	}
 
 	// Set AI detections in processed frame
@@ -207,7 +207,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 		log.Error().
 			Err(err).
 			Str("camera_id", rawFrame.CameraID).
-			Msg("Failed to create Mat from frame data for AI processing")
+			Msg("ai_mat_from_bytes_failed")
 		return result
 	}
 	defer mat.Close()
@@ -220,7 +220,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 		log.Error().
 			Err(err).
 			Str("camera_id", rawFrame.CameraID).
-			Msg("Failed to encode frame as JPEG for AI processing")
+			Msg("ai_jpeg_encode_failed")
 		return result
 	}
 	defer buf.Close()
@@ -237,7 +237,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	log.Debug().
 		Str("camera_id", rawFrame.CameraID).
 		Int("jpeg_size", len(jpegBytes)).
-		Msg("Sending high-quality JPEG-encoded frame to AI service")
+		Msg("ai_send_frame")
 
 	// Send to AI service with per-camera timeout
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
@@ -251,11 +251,11 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 			Str("camera_id", rawFrame.CameraID).
 			Str("ai_endpoint", fp.getAIEndpoint()).
 			Dur("ai_timeout", aiTimeout).
-			Msg("AI processing failed")
+			Msg("ai_processing_failed")
 		return result
 	}
 
-	log.Debug().Msgf("AI service response: %v", resp)
+	log.Debug().Msgf("ai_service_response_ok")
 
 	// Process AI response
 	result.FrameProcessed = true

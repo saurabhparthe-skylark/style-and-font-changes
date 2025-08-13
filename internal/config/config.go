@@ -33,6 +33,11 @@ type Config struct {
 	MaxCameras        int
 	ReconnectInterval time.Duration
 
+	// New: Backoff/Jitter config for reconnections
+	ReconnectBackoffMin time.Duration
+	ReconnectBackoffMax time.Duration
+	ReconnectJitterPct  int
+
 	// Frame Processing
 	// When AI is OFF - high FPS for smooth streaming
 	MaxFPSNoAI int
@@ -81,8 +86,14 @@ type Config struct {
 	// Health Check
 	HealthCheckInterval time.Duration
 
+	// New: Treat camera as unhealthy if no frames for this duration
+	FrameStaleThreshold time.Duration
+
 	// Graceful Shutdown
 	ShutdownTimeout time.Duration
+
+	// New: Delay before restarting a crashed goroutine
+	PanicRestartDelay time.Duration
 }
 
 func Load() *Config {
@@ -116,6 +127,11 @@ func Load() *Config {
 		MaxRetries:        getEnvInt("MAX_RETRIES", 3),
 		MaxCameras:        getEnvInt("MAX_CAMERAS", 10),
 		ReconnectInterval: getEnvDuration("RECONNECT_INTERVAL", 5*time.Second),
+
+		// Backoff/Jitter
+		ReconnectBackoffMin: getEnvDuration("RECONNECT_BACKOFF_MIN", 1*time.Second),
+		ReconnectBackoffMax: getEnvDuration("RECONNECT_BACKOFF_MAX", 30*time.Second),
+		ReconnectJitterPct:  getEnvInt("RECONNECT_JITTER_PCT", 20),
 
 		// Frame Processing
 		MaxFPSNoAI:       getEnvInt("MAX_FPS_NO_AI", 30),
@@ -162,9 +178,11 @@ func Load() *Config {
 
 		// Health Check
 		HealthCheckInterval: getEnvDuration("HEALTH_CHECK_INTERVAL", 30*time.Second),
+		FrameStaleThreshold: getEnvDuration("FRAME_STALE_THRESHOLD", 10*time.Second),
 
 		// Graceful Shutdown
-		ShutdownTimeout: getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
+		ShutdownTimeout:   getEnvDuration("SHUTDOWN_TIMEOUT", 30*time.Second),
+		PanicRestartDelay: getEnvDuration("PANIC_RESTART_DELAY", 2*time.Second),
 	}
 }
 

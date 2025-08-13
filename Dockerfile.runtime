@@ -30,7 +30,8 @@ FROM alpine:latest
 RUN apk add --no-cache \
     opencv \
     ca-certificates \
-    tzdata
+    tzdata \
+    curl
 
 # Create non-root user
 RUN addgroup -g 1001 -S kepler && \
@@ -47,5 +48,7 @@ RUN chown kepler:kepler /app/kepler-worker
 USER kepler
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=15s --timeout=3s --retries=3 CMD curl -fsS http://localhost:8080/health || exit 1
 
 CMD ["./kepler-worker"] 

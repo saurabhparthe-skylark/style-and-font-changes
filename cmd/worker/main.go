@@ -15,6 +15,30 @@ import (
 	"kepler-worker-go/internal/logging"
 )
 
+func main() {
+	cfg := config.Load()
+
+	if err := setupLogging(cfg); err != nil {
+		log.Error().Err(err).Msg("Failed to setup logging")
+	}
+
+	log.Info().
+		Str("worker_id", cfg.WorkerID).
+		Str("version", cfg.Version).
+		Str("environment", cfg.Environment).
+		Int("port", cfg.Port).
+		Bool("ai_enabled", cfg.AIEnabled).
+		Msg("Starting Kepler Worker with enterprise pipeline")
+
+	server, err := setupHTTPServer(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create server")
+	}
+
+	startServer(server)
+	waitForShutdown(cfg, server)
+}
+
 func setupLogging(cfg *config.Config) error {
 	zerolog.TimeFieldFormat = time.RFC3339
 
@@ -70,28 +94,4 @@ func waitForShutdown(cfg *config.Config, server *api.Server) {
 	} else {
 		log.Info().Msg("Server shutdown complete")
 	}
-}
-
-func main() {
-	cfg := config.Load()
-
-	if err := setupLogging(cfg); err != nil {
-		log.Error().Err(err).Msg("Failed to setup logging")
-	}
-
-	log.Info().
-		Str("worker_id", cfg.WorkerID).
-		Str("version", cfg.Version).
-		Str("environment", cfg.Environment).
-		Int("port", cfg.Port).
-		Bool("ai_enabled", cfg.AIEnabled).
-		Msg("Starting Kepler Worker with enterprise pipeline")
-
-	server, err := setupHTTPServer(cfg)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create server")
-	}
-
-	startServer(server)
-	waitForShutdown(cfg, server)
 }

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"image"
+	"math"
+	"math/rand/v2"
 
 	"github.com/rs/zerolog/log"
 	"gocv.io/x/gocv"
@@ -30,6 +32,9 @@ type CameraManager struct {
 	publisher      *Publisher
 
 	stopChannel chan struct{}
+
+	// internal: watchdog
+	watchdogOnce sync.Once
 }
 
 // NewCameraManager creates a new camera manager with full pipeline
@@ -60,6 +65,9 @@ func NewCameraManager(cfg *config.Config, detSvc *detection.Service) (*CameraMan
 		Int("max_fps_with_ai", cfg.MaxFPSWithAI).
 		Bool("ai_enabled", cfg.AIEnabled).
 		Msg("Camera manager initialized with enterprise pipeline")
+
+	// Start watchdog once
+	cm.watchdogOnce.Do(func() { go cm.runWatchdog() })
 
 	return cm, nil
 }
@@ -166,8 +174,13 @@ func (cm *CameraManager) runStreamReader(camera *models.Camera) {
 				Interface("panic", r).
 				Str("camera_id", camera.ID).
 				Msg("OpenCV reader panic recovered")
+			// slight delay before loop retries
+			time.Sleep(cm.cfg.PanicRestartDelay)
 		}
 	}()
+
+	// backoff state per camera
+	var attempt int
 
 	for {
 		select {
@@ -178,14 +191,21 @@ func (cm *CameraManager) runStreamReader(camera *models.Camera) {
 			if err != nil {
 				log.Error().Err(err).Str("camera_id", camera.ID).Msg("VideoCapture process failed")
 				camera.ErrorCount++
+				attempt++
 
-				// Wait before retry
+				// jittered exponential backoff within configured min/max
+				delay := cm.calculateBackoffDelay(attempt)
+				log.Info().Str("camera_id", camera.ID).Dur("retry_in", delay).Int("attempt", attempt).Msg("Reconnecting to camera")
+
 				select {
 				case <-camera.StopChannel:
 					return
-				case <-time.After(cm.cfg.ReconnectInterval):
+				case <-time.After(delay):
 					continue
 				}
+			} else {
+				// success path resets attempts
+				attempt = 0
 			}
 		}
 	}
@@ -361,6 +381,8 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 				Interface("panic", r).
 				Str("camera_id", camera.ID).
 				Msg("Frame processor panic recovered")
+			// ensure we don't hot-loop restarts
+			time.Sleep(cm.cfg.PanicRestartDelay)
 		}
 	}()
 
@@ -499,6 +521,8 @@ func (cm *CameraManager) runPublisher(camera *models.Camera) {
 				Interface("panic", r).
 				Str("camera_id", camera.ID).
 				Msg("Publisher panic recovered")
+			// ensure we don't hot-loop restarts
+			time.Sleep(cm.cfg.PanicRestartDelay)
 		}
 	}()
 
@@ -782,4 +806,71 @@ func (cm *CameraManager) ToggleCameraAI(cameraID string) error {
 		Msg("Camera AI toggled")
 
 	return nil
+}
+
+// runWatchdog periodically checks cameras for staleness and triggers restart via Stop+Start
+func (cm *CameraManager) runWatchdog() {
+	ticker := time.NewTicker(cm.cfg.HealthCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-cm.stopChannel:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			cm.mutex.RLock()
+			cameras := make([]*models.Camera, 0, len(cm.cameras))
+			for _, c := range cm.cameras {
+				cameras = append(cameras, c)
+			}
+			cm.mutex.RUnlock()
+
+			for _, cam := range cameras {
+				// If active camera hasn't produced a frame recently, restart its stream reader by nudging attempt loop
+				if cam.IsActive && !cam.LastFrameTime.IsZero() {
+					if now.Sub(cam.LastFrameTime) > cm.cfg.FrameStaleThreshold {
+						log.Warn().Str("camera_id", cam.ID).Dur("stale_for", now.Sub(cam.LastFrameTime)).Msg("Camera stream appears stale; scheduling reconnect")
+						// Soft reset by closing and recreating reader loop: stop and start
+						// We avoid deleting from map to keep configuration
+						_ = cm.StopCamera(cam.ID)
+						// Give a small delay to release resources
+						time.Sleep(300 * time.Millisecond)
+						_ = cm.StartCamera(&models.CameraRequest{CameraID: cam.ID, URL: cam.URL, Projects: cam.Projects})
+					}
+				}
+			}
+		}
+	}
+}
+
+// calculateBackoffDelay returns bounded exponential backoff with jitter
+func (cm *CameraManager) calculateBackoffDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	// base = min * 2^(attempt-1)
+	base := float64(cm.cfg.ReconnectBackoffMin) * math.Pow(2, float64(attempt-1))
+	max := float64(cm.cfg.ReconnectBackoffMax)
+	if base > max {
+		base = max
+	}
+	// jitter percentage
+	pct := cm.cfg.ReconnectJitterPct
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	jitterRange := base * float64(pct) / 100.0
+	// random in [-jitterRange, +jitterRange]
+	jitter := (rand.Float64()*2 - 1) * jitterRange
+	d := time.Duration(base + jitter)
+	if d < cm.cfg.ReconnectBackoffMin {
+		d = cm.cfg.ReconnectBackoffMin
+	}
+	if d > cm.cfg.ReconnectBackoffMax {
+		d = cm.cfg.ReconnectBackoffMax
+	}
+	return d
 }
