@@ -310,11 +310,36 @@ func (cm *CameraManager) startVideoCaptureProcess(camera *models.Camera) error {
 					Int64("frame_id", frameID).
 					Msg("Frame sent to processing pipeline")
 			default:
+				// Buffer is full - implement frame dropping for real-time streaming
+				droppedRaw := 0
+				// Drain some frames to make space for the latest
+			DrainRawLoop:
+				for len(camera.RawFrames) > cm.cfg.FrameBufferSize/2 {
+					select {
+					case <-camera.RawFrames:
+						droppedRaw++
+					default:
+						break DrainRawLoop
+					}
+				}
 
-				// log.Warn().
-				// 	Str("camera_id", camera.ID).
-				// 	Int64("frame_id", frameID).
-				// 	Msg("Dropped raw frame - processing buffer full")
+				// Now try to send the current frame
+				select {
+				case camera.RawFrames <- rawFrame:
+					if droppedRaw > 0 {
+						log.Debug().
+							Str("camera_id", camera.ID).
+							Int64("frame_id", frameID).
+							Int("dropped_raw_frames", droppedRaw).
+							Msg("Dropped older raw frames for real-time capture")
+					}
+				default:
+					// Still full, just skip this frame
+					log.Debug().
+						Str("camera_id", camera.ID).
+						Int64("frame_id", frameID).
+						Msg("Skipped raw frame - buffer still full after draining")
+				}
 			}
 
 			targetInterval := time.Second / time.Duration(cm.getTargetFPS())
@@ -373,14 +398,38 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 			}
 			return
 		case rawFrame := <-camera.RawFrames:
+			// FRAME SKIPPING: Always get the latest frame by draining the buffer
+			var latestFrame *models.RawFrame = rawFrame
+			skippedFrames := 0
+
+			// Drain all pending frames to get the absolute latest
+		DrainLoop:
+			for {
+				select {
+				case newerFrame := <-camera.RawFrames:
+					latestFrame = newerFrame
+					skippedFrames++
+				default:
+					break DrainLoop
+				}
+			}
+
+			if skippedFrames > 0 {
+				log.Debug().
+					Str("camera_id", camera.ID).
+					Int("skipped_frames", skippedFrames).
+					Int64("latest_frame_id", latestFrame.FrameID).
+					Msg("Skipped frames for real-time processing")
+			}
+
 			startTime := time.Now()
 
 			// Update camera statistics first
 			camera.FPS = cm.calculateFPS(camera)
-			camera.Latency = time.Since(rawFrame.Timestamp)
+			camera.Latency = time.Since(latestFrame.Timestamp)
 
-			// Process frame with current stats and per-camera AI settings
-			processedFrame := frameProcessor.ProcessFrame(rawFrame, camera.Projects, camera.FPS, camera.Latency)
+			// Process the latest frame with current stats and per-camera AI settings
+			processedFrame := frameProcessor.ProcessFrame(latestFrame, camera.Projects, camera.FPS, camera.Latency)
 
 			// Update camera AI statistics
 			if processedFrame.AIDetections != nil {
@@ -402,13 +451,36 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 				Str("camera_id", camera.ID).
 				Dur("processing_time", processingTime).
 				Bool("ai_enabled", camera.AIEnabled).
-				Msg("Frame processed")
+				Int("skipped_frames", skippedFrames).
+				Msg("Frame processed with real-time optimization")
 
-			// Send to publisher
+			// Send to publisher (also implement latest-frame logic here)
 			select {
 			case camera.ProcessedFrames <- processedFrame:
 			default:
-				log.Warn().Str("camera_id", camera.ID).Msg("Dropped processed frame - buffer full")
+				// If publisher buffer is full, drain it and put the latest frame
+				drainedPublisher := 0
+			DrainPublisher:
+				for {
+					select {
+					case <-camera.ProcessedFrames:
+						drainedPublisher++
+					default:
+						break DrainPublisher
+					}
+				}
+				// Now try to send the latest frame
+				select {
+				case camera.ProcessedFrames <- processedFrame:
+					if drainedPublisher > 0 {
+						log.Debug().
+							Str("camera_id", camera.ID).
+							Int("drained_publisher_frames", drainedPublisher).
+							Msg("Drained publisher buffer for real-time streaming")
+					}
+				default:
+					log.Warn().Str("camera_id", camera.ID).Msg("Still could not send to publisher after draining")
+				}
 			}
 		}
 	}

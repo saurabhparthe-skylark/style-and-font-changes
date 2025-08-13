@@ -43,7 +43,7 @@ message CameraIdRequest {
 
 // Request message for frame processing
 message FrameRequest {
-  string image = 1;       // Base64 encoded image
+  bytes image = 1;       // Base64 encoded image
   string camera_id = 2;
   repeated string project_names = 3;
 }

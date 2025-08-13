@@ -4,6 +4,9 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
+	"github.com/rs/zerolog/log"
 )
 
 type Config struct {
@@ -73,6 +76,13 @@ type Config struct {
 }
 
 func Load() *Config {
+	// Load .env file if it exists
+	if err := godotenv.Load(); err != nil {
+		log.Debug().Err(err).Msg("No .env file found or error loading .env file, using environment variables and defaults")
+	} else {
+		log.Info().Msg("Loaded configuration from .env file")
+	}
+
 	return &Config{
 		// Application
 		Version:     getEnv("VERSION", "1.0.0"),

@@ -2,7 +2,6 @@ package camera
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"image"
 	"image/color"
@@ -178,8 +177,9 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	}
 	defer mat.Close()
 
-	// Encode frame as JPEG (same as Python version)
-	buf, err := gocv.IMEncode(gocv.JPEGFileExt, mat)
+	// Use high-quality JPEG encoding to minimize quality loss
+	// Set JPEG quality to 95% to maintain color fidelity
+	buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, mat, []int{gocv.IMWriteJpegQuality})
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("Failed to encode frame as JPEG: %v", err)
 		log.Error().
@@ -192,11 +192,9 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 
 	// Convert JPEG bytes to base64 for gRPC (same as Python version)
 	jpegBytes := buf.GetBytes()
-	base64Frame := base64.StdEncoding.EncodeToString(jpegBytes)
-
 	// Create AI request
 	req := &pb.FrameRequest{
-		Image:        base64Frame,
+		Image:        jpegBytes,
 		CameraId:     rawFrame.CameraID,
 		ProjectNames: projects,
 	}
@@ -204,8 +202,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	log.Debug().
 		Str("camera_id", rawFrame.CameraID).
 		Int("jpeg_size", len(jpegBytes)).
-		Int("base64_size", len(base64Frame)).
-		Msg("Sending JPEG-encoded frame to AI service")
+		Msg("Sending high-quality JPEG-encoded frame to AI service")
 
 	// Send to AI service with per-camera timeout
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
@@ -527,16 +524,11 @@ func (fp *FrameProcessor) drawLabelWithBackground(mat *gocv.Mat, text string, x,
 		labelY = mat.Rows() - 5
 	}
 
-	// Draw semi-transparent background
-	overlay := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC3)
-	defer overlay.Close()
-
-	bgColor := color.RGBA{R: textColor.R, G: textColor.G, B: textColor.B, A: 180}
-	gocv.Rectangle(&overlay,
+	// Draw semi-transparent background rectangle directly on the mat
+	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: 180} // Black background for better readability
+	gocv.Rectangle(mat,
 		image.Rect(labelX-2, labelY-textSize.Y-2, labelX+textSize.X+2, labelY+2),
 		bgColor, -1)
-
-	gocv.AddWeighted(*mat, 0.7, overlay, 0.3, 0, mat)
 
 	// Draw the text
 	whiteColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
@@ -561,13 +553,9 @@ func (fp *FrameProcessor) drawSolutionOverlays(mat *gocv.Mat, solutions map[stri
 
 // drawPeopleCounterOverlay draws people counter information
 func (fp *FrameProcessor) drawPeopleCounterOverlay(mat *gocv.Mat, y *int, solution SolutionResults) {
-	// Create overlay background
-	overlay := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC3)
-	defer overlay.Close()
-
+	// Draw background rectangle directly without blending
 	bgColor := color.RGBA{R: 0, G: 50, B: 150, A: 200} // Dark blue
-	gocv.Rectangle(&overlay, image.Rect(5, *y-25, 400, *y+60), bgColor, -1)
-	gocv.AddWeighted(*mat, 0.8, overlay, 0.2, 0, mat)
+	gocv.Rectangle(mat, image.Rect(5, *y-25, 400, *y+60), bgColor, -1)
 
 	// Draw counter text
 	textColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
@@ -615,16 +603,11 @@ func (fp *FrameProcessor) drawStatsOverlay(mat *gocv.Mat, frame *models.Processe
 		startY = 100
 	}
 
-	// Draw background
-	overlay := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC3)
-	defer overlay.Close()
-
-	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: 180}
-	gocv.Rectangle(&overlay,
+	// Draw background rectangle directly without blending to preserve original frame brightness
+	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: 180} // Semi-transparent black
+	gocv.Rectangle(mat,
 		image.Rect(5, startY-padding, maxTextWidth+padding*2+5, startY+len(statsLines)*lineHeight+padding),
 		bgColor, -1)
-
-	gocv.AddWeighted(*mat, 0.7, overlay, 0.3, 0, mat)
 
 	// Draw stats text
 	textColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}

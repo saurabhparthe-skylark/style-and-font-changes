@@ -106,7 +106,7 @@ func (x *CameraIdRequest) GetCameraId() string {
 // Request message for frame processing
 type FrameRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Image         string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"` // Base64 encoded image
+	Image         []byte                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"` // Base64 encoded image
 	CameraId      string                 `protobuf:"bytes,2,opt,name=camera_id,json=cameraId,proto3" json:"camera_id,omitempty"`
 	ProjectNames  []string               `protobuf:"bytes,3,rep,name=project_names,json=projectNames,proto3" json:"project_names,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -143,11 +143,11 @@ func (*FrameRequest) Descriptor() ([]byte, []int) {
 	return file_proto_detection_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *FrameRequest) GetImage() string {
+func (x *FrameRequest) GetImage() []byte {
 	if x != nil {
 		return x.Image
 	}
-	return ""
+	return nil
 }
 
 func (x *FrameRequest) GetCameraId() string {
@@ -1364,7 +1364,7 @@ const file_proto_detection_proto_rawDesc = "" +
 	"\x0fCameraIdRequest\x12\x1b\n" +
 	"\tcamera_id\x18\x01 \x01(\tR\bcameraId\"f\n" +
 	"\fFrameRequest\x12\x14\n" +
-	"\x05image\x18\x01 \x01(\tR\x05image\x12\x1b\n" +
+	"\x05image\x18\x01 \x01(\fR\x05image\x12\x1b\n" +
 	"\tcamera_id\x18\x02 \x01(\tR\bcameraId\x12#\n" +
 	"\rproject_names\x18\x03 \x03(\tR\fprojectNames\"\x98\x01\n" +
 	"\n" +

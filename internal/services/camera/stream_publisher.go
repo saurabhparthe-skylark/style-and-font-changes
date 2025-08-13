@@ -10,6 +10,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"gocv.io/x/gocv"
 
+	"image"
+	"image/color"
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
 )
@@ -69,7 +71,9 @@ func (p *Publisher) updateLatestJPEG(frame *models.ProcessedFrame) error {
 	}
 	defer mat.Close()
 
-	buf, err := gocv.IMEncode(gocv.JPEGFileExt, mat)
+	// Use high-quality JPEG encoding to maintain color fidelity for streaming
+	// Set JPEG quality to 90% for good balance between quality and size
+	buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, mat, []int{gocv.IMWriteJpegQuality, 90})
 	if err != nil {
 		return fmt.Errorf("failed to encode JPEG: %w", err)
 	}
@@ -167,11 +171,22 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 	first, ok := p.latestJPEG[cameraID]
 	p.jpegMutex.RUnlock()
 	if !ok || len(first) == 0 {
-		// Create a simple gray placeholder JPEG 640x360
+		// Create a better placeholder JPEG with camera info
 		placeholder := gocv.NewMatWithSize(360, 640, gocv.MatTypeCV8UC3)
 		defer placeholder.Close()
-		placeholder.SetTo(gocv.Scalar{Val1: 128, Val2: 128, Val3: 128, Val4: 0})
-		buf, err := gocv.IMEncode(gocv.JPEGFileExt, placeholder)
+
+		// Fill with dark gray instead of medium gray for better contrast
+		placeholder.SetTo(gocv.Scalar{Val1: 64, Val2: 64, Val3: 64, Val4: 0})
+
+		// Add text indicating camera is starting
+		textColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+		gocv.PutText(&placeholder, fmt.Sprintf("Camera: %s", cameraID),
+			image.Pt(20, 180), gocv.FontHersheySimplex, 1.0, textColor, 2)
+		gocv.PutText(&placeholder, "Initializing...",
+			image.Pt(20, 220), gocv.FontHersheySimplex, 0.8, textColor, 2)
+
+		// Use high quality for placeholder too
+		buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, placeholder, []int{gocv.IMWriteJpegQuality, 90})
 		if err == nil {
 			first = buf.GetBytes()
 			buf.Close()

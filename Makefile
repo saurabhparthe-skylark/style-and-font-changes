@@ -1,6 +1,6 @@
 SHELL := /usr/bin/fish
 
-.PHONY: build clean proto swagger run dev test fmt lint help
+.PHONY: build clean proto swagger run dev test fmt lint help build-static build-static-alpine build-static-pkgconfig build-minimal
 
 # Application configuration
 APP_NAME=kepler-worker
@@ -17,11 +17,64 @@ CMD_DIR=./cmd/worker
 # Build flags
 LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)"
 
+# Static build flags for minimal external dependencies
+STATIC_LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT) -linkmode external -extldflags '-static'"
+
+# CGO flags for static builds - includes all required dependencies
+CGO_STATIC_FLAGS=CGO_ENABLED=1 \
+	CGO_CFLAGS="-I/usr/include/opencv4" \
+	CGO_LDFLAGS="-L/usr/lib/x86_64-linux-gnu \
+		-lopencv_core -lopencv_imgproc -lopencv_imgcodecs -lopencv_videoio -lopencv_highgui \
+		-lopencv_features2d -lopencv_calib3d -lopencv_objdetect -lopencv_video -lopencv_dnn \
+		-llapack -lblas -lgfortran -lquadmath \
+		-lprotobuf -lGL -lGLU -lX11 -lXext \
+		-lpthread -ldl -lm -lz -ljpeg -lpng -ltiff -lwebp \
+		-static-libgcc -static-libstdc++"
+
 ## Build the application binary
 build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BIN_DIR)
 	go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME) $(CMD_DIR)
+
+## Build static binary (requires OpenCV dev libraries)
+build-static:
+	@echo "Building static $(BINARY_NAME)..."
+	@echo "Note: This requires OpenCV development libraries installed on the build system"
+	@mkdir -p $(BIN_DIR)
+	$(CGO_STATIC_FLAGS) go build -a -installsuffix cgo $(STATIC_LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-static $(CMD_DIR)
+
+## Build with minimal dynamic linking (recommended for deployment)
+build-minimal:
+	@echo "Building $(BINARY_NAME) with minimal dynamic linking..."
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=1 go build -a $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-minimal $(CMD_DIR)
+
+## Build using Alpine-based static linking approach
+build-static-alpine:
+	@echo "Building static binary using Alpine approach..."
+	@echo "This target should be run in an Alpine Linux container with OpenCV static libraries"
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="-I/usr/include/opencv4" \
+	CGO_LDFLAGS="-L/usr/lib -lopencv_core -lopencv_imgproc -lopencv_imgcodecs -lopencv_videoio -lopencv_highgui -static" \
+	go build -a -ldflags "-linkmode external -extldflags '-static' -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)" \
+	-o $(BIN_DIR)/$(BINARY_NAME)-static-alpine $(CMD_DIR)
+
+## Build static with pkg-config detection (recommended)
+build-static-pkgconfig:
+	@echo "Building static binary using pkg-config for OpenCV detection..."
+	@echo "Installing required dependencies first..."
+	sudo apt update && sudo apt install -y \
+		libopencv-dev liblapack-dev libblas-dev libprotobuf-dev \
+		libgl1-mesa-dev libglu1-mesa-dev libx11-dev libxext-dev \
+		libjpeg-dev libpng-dev libtiff-dev libwebp-dev
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="$$(pkg-config --cflags opencv4)" \
+	CGO_LDFLAGS="$$(pkg-config --libs --static opencv4) -llapack -lblas -lgfortran -lquadmath -lprotobuf -lGL -lGLU -lX11 -lXext -lpthread -ldl -lm -lz" \
+	go build -a -ldflags "-linkmode external -extldflags '-static' -X main.Version=$(VERSION) -X main.BuildTime=$(BUILD_TIME) -X main.GitCommit=$(GIT_COMMIT)" \
+	-o $(BIN_DIR)/$(BINARY_NAME)-static-pkg $(CMD_DIR)
 
 ## Build for multiple architectures
 build-multi:
@@ -101,3 +154,9 @@ tools:
 help:
 	@echo "Available targets:"
 	@grep -E '^## ' Makefile | sed 's/## /  /'
+	@echo ""
+	@echo "Static Build Notes:"
+	@echo "  build-static            - Attempts static build (requires OpenCV dev libs)"
+	@echo "  build-static-pkgconfig  - Auto-detects and installs deps (recommended)"
+	@echo "  build-minimal           - Minimal dynamic linking (good for containers)"
+	@echo "  build-static-alpine     - For use in Alpine container with static OpenCV"
