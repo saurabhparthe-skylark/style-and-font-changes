@@ -16,20 +16,14 @@ import (
 	"kepler-worker-go/internal/models"
 )
 
-// Publisher handles MJPEG publishing of frames
 type Publisher struct {
-	cfg *config.Config
-
-	// MJPEG latest-frame buffer
-	jpegMutex  sync.RWMutex
-	latestJPEG map[string][]byte
-
-	// Event-driven notification for new frames
+	cfg         *config.Config
+	jpegMutex   sync.RWMutex
+	latestJPEG  map[string][]byte
 	frameNotify map[string]chan struct{}
 	notifyMutex sync.RWMutex
 }
 
-// NewPublisher creates a new publisher
 func NewPublisher(cfg *config.Config) (*Publisher, error) {
 	p := &Publisher{
 		cfg:         cfg,
@@ -37,33 +31,18 @@ func NewPublisher(cfg *config.Config) (*Publisher, error) {
 		frameNotify: make(map[string]chan struct{}),
 	}
 
-	log.Info().Msg("Publisher initialized (MJPEG only)")
 	return p, nil
 }
 
-// PublishFrame ingests a processed frame; updates MJPEG buffer
 func (p *Publisher) PublishFrame(frame *models.ProcessedFrame) error {
-	log.Debug().
-		Str("camera_id", frame.CameraID).
-		Int64("frame_id", frame.FrameID).
-		Int("frame_size", len(frame.Data)).
-		Float64("fps", frame.FPS).
-		Dur("latency", frame.Latency).
-		Bool("ai_enabled", frame.AIEnabled).
-		Msg("Publishing frame")
-
-	// Always keep a fresh JPEG for MJPEG streaming
 	if err := p.updateLatestJPEG(frame); err != nil {
-		log.Warn().Err(err).Str("camera_id", frame.CameraID).Msg("Failed to encode JPEG for MJPEG")
 		return nil
 	}
 
-	// Notify any active MJPEG streamers about the new frame
 	p.notifyStreamers(frame.CameraID)
 	return nil
 }
 
-// updateLatestJPEG encodes frame to JPEG and stores it for MJPEG
 func (p *Publisher) updateLatestJPEG(frame *models.ProcessedFrame) error {
 	mat, err := gocv.NewMatFromBytes(frame.Height, frame.Width, gocv.MatTypeCV8UC3, frame.Data)
 	if err != nil {
@@ -71,13 +50,11 @@ func (p *Publisher) updateLatestJPEG(frame *models.ProcessedFrame) error {
 	}
 	defer mat.Close()
 
-	// Use high-quality JPEG encoding to maintain color fidelity for streaming
-	// Set JPEG quality to 90% for good balance between quality and size
 	buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, mat, []int{gocv.IMWriteJpegQuality, 90})
 	if err != nil {
 		return fmt.Errorf("failed to encode JPEG: %w", err)
 	}
-	// IMPORTANT: deep copy bytes before closing the buffer to avoid reuse/corruption
+
 	b := buf.GetBytes()
 	jpegCopy := make([]byte, len(b))
 	copy(jpegCopy, b)
@@ -89,14 +66,12 @@ func (p *Publisher) updateLatestJPEG(frame *models.ProcessedFrame) error {
 	return nil
 }
 
-// notifyStreamers notifies all active streamers for a camera about new frame
 func (p *Publisher) notifyStreamers(cameraID string) {
 	p.notifyMutex.RLock()
 	notify, exists := p.frameNotify[cameraID]
 	p.notifyMutex.RUnlock()
 
 	if exists {
-		// Non-blocking notify (drop if channel full)
 		select {
 		case notify <- struct{}{}:
 		default:
@@ -104,20 +79,18 @@ func (p *Publisher) notifyStreamers(cameraID string) {
 	}
 }
 
-// getOrCreateNotifyChannel gets or creates notification channel for camera
 func (p *Publisher) getOrCreateNotifyChannel(cameraID string) chan struct{} {
 	p.notifyMutex.Lock()
 	defer p.notifyMutex.Unlock()
 
 	notify, exists := p.frameNotify[cameraID]
 	if !exists {
-		notify = make(chan struct{}, 5) // Small buffer to avoid blocking publisher
+		notify = make(chan struct{}, 5)
 		p.frameNotify[cameraID] = notify
 	}
 	return notify
 }
 
-// cleanupNotifyChannel removes notification channel when stream ends
 func (p *Publisher) cleanupNotifyChannel(cameraID string) {
 	p.notifyMutex.Lock()
 	defer p.notifyMutex.Unlock()
@@ -128,7 +101,6 @@ func (p *Publisher) cleanupNotifyChannel(cameraID string) {
 	}
 }
 
-// StreamMJPEGHTTP streams MJPEG over HTTP for a camera ID with event-driven approach
 func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, cameraID string) {
 	boundary := "frame"
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+boundary)
@@ -142,7 +114,6 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 		return
 	}
 
-	// Get notification channel for this camera
 	notify := p.getOrCreateNotifyChannel(cameraID)
 	defer p.cleanupNotifyChannel(cameraID)
 
@@ -166,26 +137,21 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 		return true
 	}
 
-	// Send first frame immediately (or placeholder) so client renders instantly
 	p.jpegMutex.RLock()
 	first, ok := p.latestJPEG[cameraID]
 	p.jpegMutex.RUnlock()
 	if !ok || len(first) == 0 {
-		// Create a better placeholder JPEG with camera info
 		placeholder := gocv.NewMatWithSize(360, 640, gocv.MatTypeCV8UC3)
 		defer placeholder.Close()
 
-		// Fill with dark gray instead of medium gray for better contrast
 		placeholder.SetTo(gocv.Scalar{Val1: 64, Val2: 64, Val3: 64, Val4: 0})
 
-		// Add text indicating camera is starting
 		textColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
 		gocv.PutText(&placeholder, fmt.Sprintf("Camera: %s", cameraID),
 			image.Pt(20, 180), gocv.FontHersheySimplex, 1.0, textColor, 2)
 		gocv.PutText(&placeholder, "Initializing...",
 			image.Pt(20, 220), gocv.FontHersheySimplex, 0.8, textColor, 2)
 
-		// Use high quality for placeholder too
 		buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, placeholder, []int{gocv.IMWriteJpegQuality, 90})
 		if err == nil {
 			first = buf.GetBytes()
@@ -198,8 +164,7 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 		}
 	}
 
-	// Event-driven frame streaming with keepalive
-	keepaliveTicker := time.NewTicker(2 * time.Second) // Keepalive every 2 seconds
+	keepaliveTicker := time.NewTicker(2 * time.Second)
 	defer keepaliveTicker.Stop()
 
 	ctx := r.Context()
@@ -208,7 +173,6 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 		case <-ctx.Done():
 			return
 		case <-notify:
-			// New frame available - send it immediately
 			p.jpegMutex.RLock()
 			buf, ok := p.latestJPEG[cameraID]
 			p.jpegMutex.RUnlock()
@@ -218,7 +182,6 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 				}
 			}
 		case <-keepaliveTicker.C:
-			// Keepalive - resend current frame to prevent browser timeout
 			p.jpegMutex.RLock()
 			buf, ok := p.latestJPEG[cameraID]
 			p.jpegMutex.RUnlock()
@@ -231,7 +194,6 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 	}
 }
 
-// Shutdown shuts down the publisher
 func (p *Publisher) Shutdown() {
-	log.Info().Msg("Publisher shutting down (MJPEG only)")
+	log.Info().Msg("Publisher shutting down")
 }

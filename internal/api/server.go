@@ -53,19 +53,20 @@ func NewServer(cfg *config.Config) (*Server, error) {
 }
 
 func (s *Server) setupRoutes() {
-	s.router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy", "worker_id": s.cfg.WorkerID, "port": s.cfg.Port})
-	})
-	s.router.GET("/metrics", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"worker_id": s.cfg.WorkerID, "metrics": gin.H{"status": "ok"}})
-	})
-	s.router.GET("/worker/info", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"worker_id": s.cfg.WorkerID, "version": s.cfg.Version, "port": s.cfg.Port, "ai_enabled": s.cfg.AIEnabled})
-	})
+	healthHandler := handlers.NewHealthHandler(s.cfg, s.container)
+	s.router.GET("/health", healthHandler.Check)
+	s.router.GET("/status", healthHandler.Status)
+	s.router.GET("/metrics", healthHandler.Metrics)
+
+	// Test endpoints
+	testGroup := s.router.Group("/test")
+	{
+		testGroup.POST("/nats", healthHandler.TestNATS)
+	}
+
 	cameraHandler := handlers.NewCameraHandler(s.container.CameraManager)
 	cameraGroup := s.router.Group("cameras")
 	{
-		cameraGroup.POST("", cameraHandler.StartCamera)
 		cameraGroup.POST("/start", cameraHandler.StartCamera)
 		cameraGroup.POST("/:camera_id/stop", cameraHandler.StopCamera)
 		cameraGroup.GET("", cameraHandler.ListCameras)
@@ -76,15 +77,45 @@ func (s *Server) setupRoutes() {
 		cameraGroup.POST("/:camera_id/ai/toggle", cameraHandler.ToggleCameraAI)
 	}
 	s.router.GET("/mjpeg/:camera_id", func(c *gin.Context) {
-		cameraID := c.Param("camera_id")
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		s.container.CameraManager.PublisherStreamMJPEG(c.Writer, c.Request, cameraID)
+		s.container.CameraManager.ServeHTTP(c.Writer, c.Request)
 	})
-	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, ginSwagger.URL(fmt.Sprintf("http://%s:%d/swagger/doc.json", s.cfg.SwaggerHost, s.cfg.SwaggerPort)), ginSwagger.DefaultModelsExpandDepth(-1)))
+
+	// Dynamic Swagger URL based on request host to allow access from any IP
+	s.router.GET("/swagger/*any", func(c *gin.Context) {
+		// Determine the scheme (http or https)
+		scheme := "http"
+		if c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https" {
+			scheme = "https"
+		}
+
+		// Use the request host or fall back to config
+		host := c.Request.Host
+		if host == "" {
+			host = fmt.Sprintf("%s:%d", s.cfg.SwaggerHost, s.cfg.SwaggerPort)
+		}
+
+		// Construct dynamic URL
+		swaggerURL := fmt.Sprintf("%s://%s/swagger/doc.json", scheme, host)
+
+		// Serve with dynamic URL
+		ginSwagger.WrapHandler(
+			swaggerFiles.Handler,
+			ginSwagger.URL(swaggerURL),
+			ginSwagger.DefaultModelsExpandDepth(-1),
+		)(c)
+	})
 }
 
 func (s *Server) Start() error {
-	log.Info().Str("worker_id", s.cfg.WorkerID).Int("port", s.cfg.Port).Bool("ai_enabled", s.cfg.AIEnabled).Str("swagger_host", s.cfg.SwaggerHost).Int("swagger_port", s.cfg.SwaggerPort).Int("ai_frame_interval", s.cfg.AIFrameInterval).Msg("Starting Kepler Worker server with enterprise pipeline")
+	log.Info().
+		Str("worker_id", s.cfg.WorkerID).
+		Int("port", s.cfg.Port).
+		Bool("ai_enabled", s.cfg.AIEnabled).
+		Str("swagger_host", s.cfg.SwaggerHost).
+		Int("swagger_port", s.cfg.SwaggerPort).
+		Int("ai_frame_interval", s.cfg.AIFrameInterval).
+		Msg("Starting Kepler Worker server with enterprise pipeline")
 	return s.server.ListenAndServe()
 }
 

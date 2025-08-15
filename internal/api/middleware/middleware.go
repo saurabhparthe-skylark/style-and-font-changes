@@ -14,9 +14,6 @@ func Logger() gin.HandlerFunc {
 			Str("method", param.Method).
 			Str("path", param.Path).
 			Int("status", param.StatusCode).
-			Dur("latency", param.Latency).
-			Str("client_ip", param.ClientIP).
-			Str("user_agent", param.Request.UserAgent()).
 			Msg("http_request")
 		return ""
 	})
@@ -36,10 +33,12 @@ func Recovery() gin.HandlerFunc {
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-CSRF-Token, X-Request-ID, X-Requested-With")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD")
+		c.Header("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, X-CSRF-Token, X-Request-ID, X-Requested-With, Origin, Cache-Control, Pragma")
 		c.Header("Access-Control-Allow-Credentials", "true")
 		c.Header("Access-Control-Expose-Headers", "Content-Length, X-Request-ID")
+		c.Header("Access-Control-Max-Age", "86400") // 24 hours
+
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
 			return

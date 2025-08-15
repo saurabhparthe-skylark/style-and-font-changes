@@ -1,4 +1,4 @@
-package handlers
+package models
 
 // ErrorResponse represents an error response
 type ErrorResponse struct {

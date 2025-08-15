@@ -27,6 +27,15 @@ type Config struct {
 	BackendURL  string
 	AIGRPCURL   string
 
+	// NATS (for messaging and alerts)
+	// Default: nats://localhost:4222 (works with Docker Compose setup)
+	// Docker: Use nats://nats:4222 if running worker in Docker
+	NatsURL            string
+	NatsConnectTimeout time.Duration
+	NatsReconnectWait  time.Duration
+	NatsMaxReconnects  int
+	NatsDrainTimeout   time.Duration // For graceful shutdown
+
 	// Streaming Configuration
 	RTSPTimeout       time.Duration
 	MaxRetries        int
@@ -55,6 +64,30 @@ type Config struct {
 	AIRetries         int
 	ProcessingWorkers int
 	AIFrameInterval   int // Process every Nth frame for AI (1 = every frame, 2 = every 2nd frame, etc.)
+
+	// Alerting via NATS
+	AlertsSubject  string
+	AlertsWorkers  int
+	AlertsCooldown time.Duration
+
+	// Suppressions via NATS
+	SuppressionSubject  string
+	SuppressionWorkers  int
+	SuppressionCooldown time.Duration
+
+	// Image Compression for Alerts (to prevent NATS payload exceeded errors)
+	ImageCompressionEnabled bool
+	MaxImageWidth           int
+	MaxImageHeight          int
+	ImageQuality            int // JPEG quality (1-100)
+	MaxContextImageSize     int // bytes
+	MaxDetectionImageSize   int // bytes
+	MaxTotalPayloadSize     int // bytes
+
+	// Video Recording
+	VideoOutputDir   string
+	VideoSegmentTime int // seconds per segment
+	VideoMaxSegments int // max segments to keep in playlist
 
 	// Stream Output
 	OutputWidth   int
@@ -114,13 +147,20 @@ func Load() *Config {
 
 		// Logdy (lightweight web log viewer)
 		LogdyEnabled: getEnvBool("LOGDY_ENABLED", true),
-		LogdyHost:    getEnv("LOGDY_HOST", "127.0.0.1"),
+		LogdyHost:    getEnv("LOGDY_HOST", "localhost"),
 		LogdyPort:    getEnvInt("LOGDY_PORT", 8080),
 
 		// External Services
 		MediaMTXURL: getEnv("MEDIAMTX_URL", "http://localhost:8889"),
 		BackendURL:  getEnv("BACKEND_URL", "http://localhost:8500"),
-		AIGRPCURL:   getEnv("AI_GRPC_URL", "54.89.211.207:50052"),
+		AIGRPCURL:   getEnv("AI_GRPC_URL", "192.168.1.76:50052"),
+
+		// NATS (configured for Docker Compose setup)
+		NatsURL:            getNatsURL(),
+		NatsConnectTimeout: getEnvDuration("NATS_CONNECT_TIMEOUT", 10*time.Second),
+		NatsReconnectWait:  getEnvDuration("NATS_RECONNECT_WAIT", 2*time.Second),
+		NatsMaxReconnects:  getEnvInt("NATS_MAX_RECONNECTS", -1), // -1 = unlimited
+		NatsDrainTimeout:   getEnvDuration("NATS_DRAIN_TIMEOUT", 5*time.Second),
 
 		// Streaming Configuration
 		RTSPTimeout:       getEnvDuration("RTSP_TIMEOUT", 10*time.Second),
@@ -145,22 +185,46 @@ func Load() *Config {
 		AITimeout:         getEnvDuration("AI_TIMEOUT", 5*time.Second),
 		AIRetries:         getEnvInt("AI_RETRIES", 3),
 		ProcessingWorkers: getEnvInt("PROCESSING_WORKERS", 4),
-		AIFrameInterval:   getEnvInt("AI_FRAME_INTERVAL", 1), // Process every 3rd frame by default
+		AIFrameInterval:   getEnvInt("AI_FRAME_INTERVAL", 1),
+
+		// Alerting via NATS
+		AlertsSubject:  getEnv("ALERTS_SUBJECT", "alerts"),
+		AlertsWorkers:  getEnvInt("ALERTS_WORKERS", 2),
+		AlertsCooldown: getEnvDuration("ALERTS_COOLDOWN", 15*time.Second),
+
+		// Suppressions via NATS
+		SuppressionSubject:  getEnv("SUPPRESSION_SUBJECT", "suppressions"),
+		SuppressionWorkers:  getEnvInt("SUPPRESSION_WORKERS", 2),
+		SuppressionCooldown: getEnvDuration("SUPPRESSION_COOLDOWN", 10*time.Second),
+
+		// Image Compression for Alerts (disabled for performance)
+		ImageCompressionEnabled: getEnvBool("IMAGE_COMPRESSION_ENABLED", false),
+		MaxImageWidth:           getEnvInt("MAX_IMAGE_WIDTH", 1920),
+		MaxImageHeight:          getEnvInt("MAX_IMAGE_HEIGHT", 1080),
+		ImageQuality:            getEnvInt("IMAGE_QUALITY", 95),
+		MaxContextImageSize:     getEnvInt("MAX_CONTEXT_IMAGE_SIZE", 10*1024*1024),  // 10MB
+		MaxDetectionImageSize:   getEnvInt("MAX_DETECTION_IMAGE_SIZE", 5*1024*1024), // 5MB
+		MaxTotalPayloadSize:     getEnvInt("MAX_TOTAL_PAYLOAD_SIZE", 50*1024*1024),  // 50MB
+
+		// Video Recording
+		VideoOutputDir:   getEnv("VIDEO_OUTPUT_DIR", "/tmp/kepler-videos"),
+		VideoSegmentTime: getEnvInt("VIDEO_SEGMENT_TIME", 2),
+		VideoMaxSegments: getEnvInt("VIDEO_MAX_SEGMENTS", 10),
 
 		// Stream Output
 		OutputWidth:   getEnvInt("OUTPUT_WIDTH", 1280),
 		OutputHeight:  getEnvInt("OUTPUT_HEIGHT", 720),
-		OutputQuality: getEnvInt("OUTPUT_QUALITY", 75),   // 0-100
-		OutputBitrate: getEnvInt("OUTPUT_BITRATE", 2000), // kbps
+		OutputQuality: getEnvInt("OUTPUT_QUALITY", 75),
+		OutputBitrate: getEnvInt("OUTPUT_BITRATE", 2000),
 
 		// MediaMTX Publishing
 		WHIPTimeout:   getEnvDuration("WHIP_TIMEOUT", 10*time.Second),
 		HLSSegments:   getEnvInt("HLS_SEGMENTS", 10),
-		RTSPTransport: getEnv("RTSP_TRANSPORT", "udp"), // "udp", "tcp", "http"
+		RTSPTransport: getEnv("RTSP_TRANSPORT", "udp"),
 
 		// Swagger Configuration
 		SwaggerHost: getEnv("SWAGGER_HOST", "localhost"),
-		SwaggerPort: getEnvInt("SWAGGER_PORT", 8000), // Use same as main port by default
+		SwaggerPort: getEnvInt("SWAGGER_PORT", 8000),
 
 		// Metadata Overlay
 		ShowFPS:      getEnvBool("SHOW_FPS", true),
@@ -168,8 +232,8 @@ func Load() *Config {
 		ShowCameraID: getEnvBool("SHOW_CAMERA_ID", true),
 		ShowAIStatus: getEnvBool("SHOW_AI_STATUS", false),
 		ShowMetadata: getEnvBool("SHOW_METADATA", true),
-		OverlayColor: getEnv("OVERLAY_COLOR", "#FF0000"), // Red
-		OverlayFont:  getEnvInt("OVERLAY_FONT", 2),       // 1-5
+		OverlayColor: getEnv("OVERLAY_COLOR", "#FF0000"),
+		OverlayFont:  getEnvInt("OVERLAY_FONT", 2),
 
 		// WebRTC Configuration
 		WebRTCICEServers: []string{
@@ -218,4 +282,33 @@ func getEnvBool(key string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+// Helper functions for Docker environment detection
+func isRunningInDocker() bool {
+	// Check for Docker-specific environment indicators
+	if os.Getenv("DOCKER_CONTAINER") == "true" {
+		return true
+	}
+
+	// Check for .dockerenv file
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+
+	return false
+}
+
+// getNatsURL returns the appropriate NATS URL based on environment
+func getNatsURL() string {
+	if envURL := os.Getenv("NATS_URL"); envURL != "" {
+		return envURL
+	}
+
+	// If running in Docker, use service name; otherwise use localhost
+	if isRunningInDocker() {
+		return "nats://nats:4222"
+	}
+
+	return "nats://localhost:4222"
 }

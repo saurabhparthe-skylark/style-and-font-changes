@@ -35,6 +35,8 @@ type Camera struct {
 	// Pipeline channels
 	RawFrames       chan *RawFrame
 	ProcessedFrames chan *ProcessedFrame
+	AlertFrames     chan *ProcessedFrame // New: for parallel alert processing
+	RecorderFrames  chan *ProcessedFrame // New: for parallel video recording
 
 	// Control
 	StopChannel chan struct{}

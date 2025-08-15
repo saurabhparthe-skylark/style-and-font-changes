@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"runtime"
 	"time"
@@ -64,6 +65,16 @@ type MetricsResponse struct {
 	Timestamp time.Time              `json:"timestamp"`
 }
 
+type TestMessageResponse struct {
+	Status     string    `json:"status"`
+	WorkerID   string    `json:"worker_id"`
+	Subject    string    `json:"subject"`
+	Message    string    `json:"message"`
+	Timestamp  time.Time `json:"timestamp"`
+	NATSStatus string    `json:"nats_status"`
+	MessageID  string    `json:"message_id"`
+}
+
 // Check godoc
 // @Summary Health check
 // @Description Get worker health status
@@ -100,11 +111,8 @@ func (h *HealthHandler) Status(c *gin.Context) {
 
 	uptime := time.Since(h.startTime).String()
 
-	// Get camera stats
-	cameraStats := CameraStats{
-		Active: 0,
-		Total:  0,
-	}
+	// Camera Manager Health
+	cameraStats := CameraStats{}
 	if h.container.CameraManager != nil {
 		active, total := h.container.CameraManager.GetStats()
 		cameraStats.Active = active
@@ -113,8 +121,9 @@ func (h *HealthHandler) Status(c *gin.Context) {
 
 	// Service status
 	services := map[string]string{
-		"camera_manager":    getServiceStatus(h.container.CameraManager != nil),
-		"detection_service": getServiceStatus(h.container.DetectionSvc != nil),
+		"camera_manager":         getServiceStatus(h.container.CameraManager != nil),
+		"postprocessing_service": getServiceStatus(h.container.PostProcessingSvc != nil),
+		"message_service":        getServiceStatus(h.container.MessageSvc != nil),
 	}
 
 	response := StatusResponse{
@@ -190,6 +199,69 @@ func (h *HealthHandler) Metrics(c *gin.Context) {
 		WorkerID:  h.cfg.WorkerID,
 		Metrics:   metrics,
 		Timestamp: time.Now(),
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// TestNATS godoc
+// @Summary Test NATS messaging
+// @Description Send a test message to NATS to verify messaging is working
+// @Tags health
+// @Accept json
+// @Produce json
+// @Success 200 {object} TestMessageResponse
+// @Failure 500 {object} TestMessageResponse
+// @Router /test/nats [post]
+func (h *HealthHandler) TestNATS(c *gin.Context) {
+	// Generate unique message ID
+	messageID := fmt.Sprintf("test-%d-%s", time.Now().Unix(), h.cfg.WorkerID)
+
+	// Create test message
+	testMessage := map[string]interface{}{
+		"id":        messageID,
+		"worker_id": h.cfg.WorkerID,
+		"type":      "test",
+		"message":   "NATS connectivity test",
+		"timestamp": time.Now(),
+		"data": map[string]interface{}{
+			"test_number": time.Now().Unix(),
+			"environment": h.cfg.Environment,
+		},
+	}
+
+	// Check if messaging service is available
+	natsStatus := "disconnected"
+	if h.container.MessageSvc != nil && h.container.MessageSvc.IsConnected() {
+		natsStatus = "connected"
+	}
+
+	response := TestMessageResponse{
+		WorkerID:   h.cfg.WorkerID,
+		Subject:    h.cfg.AlertsSubject,
+		Message:    "Test message sent successfully",
+		Timestamp:  time.Now(),
+		NATSStatus: natsStatus,
+		MessageID:  messageID,
+	}
+
+	// Try to send the message if NATS is connected
+	if h.container.MessageSvc != nil && h.container.MessageSvc.IsConnected() {
+		err := h.container.MessageSvc.Publish(h.cfg.AlertsSubject, testMessage)
+		if err != nil {
+			response.Status = "error"
+			response.Message = fmt.Sprintf("Failed to send test message: %v", err)
+			c.JSON(http.StatusInternalServerError, response)
+			return
+		}
+
+		response.Status = "success"
+		response.Message = "Test message sent successfully to NATS"
+	} else {
+		response.Status = "error"
+		response.Message = "NATS messaging service is not connected"
+		c.JSON(http.StatusServiceUnavailable, response)
+		return
 	}
 
 	c.JSON(http.StatusOK, response)

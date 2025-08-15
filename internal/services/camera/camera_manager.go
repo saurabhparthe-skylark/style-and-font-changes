@@ -7,22 +7,17 @@ import (
 	"sync"
 	"time"
 
-	"image"
-	"math"
-	"math/rand/v2"
-
 	"github.com/rs/zerolog/log"
-	"gocv.io/x/gocv"
 
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
-	"kepler-worker-go/internal/services/detection"
+	"kepler-worker-go/internal/services/postprocessing"
+	"kepler-worker-go/internal/services/recorder"
 )
 
 // CameraManager manages the entire camera pipeline
 type CameraManager struct {
-	cfg    *config.Config
-	detSvc *detection.Service
+	cfg *config.Config
 
 	cameras map[string]*models.Camera
 	mutex   sync.RWMutex
@@ -30,17 +25,22 @@ type CameraManager struct {
 	// Pipeline components
 	frameProcessor *FrameProcessor
 	publisher      *Publisher
+	streamCapture  *StreamCapture
+	recorder       *recorder.Service
 
 	stopChannel chan struct{}
 
 	// internal: watchdog
 	watchdogOnce sync.Once
+
+	// Post-processing service
+	postProcessingService *postprocessing.Service
 }
 
 // NewCameraManager creates a new camera manager with full pipeline
-func NewCameraManager(cfg *config.Config, detSvc *detection.Service) (*CameraManager, error) {
+func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service, recorderSvc *recorder.Service) (*CameraManager, error) {
 	// Create pipeline components
-	frameProcessor, err := NewFrameProcessor(cfg, detSvc)
+	frameProcessor, err := NewFrameProcessor(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create frame processor: %w", err)
 	}
@@ -50,13 +50,17 @@ func NewCameraManager(cfg *config.Config, detSvc *detection.Service) (*CameraMan
 		return nil, fmt.Errorf("failed to create publisher: %w", err)
 	}
 
+	streamCapture := NewStreamCapture(cfg)
+
 	cm := &CameraManager{
-		cfg:            cfg,
-		detSvc:         detSvc,
-		cameras:        make(map[string]*models.Camera),
-		frameProcessor: frameProcessor,
-		publisher:      publisher,
-		stopChannel:    make(chan struct{}),
+		cfg:                   cfg,
+		cameras:               make(map[string]*models.Camera),
+		frameProcessor:        frameProcessor,
+		publisher:             publisher,
+		streamCapture:         streamCapture,
+		recorder:              recorderSvc,
+		stopChannel:           make(chan struct{}),
+		postProcessingService: postProcessingSvc,
 	}
 
 	log.Info().
@@ -128,12 +132,14 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		AITimeout:  aiTimeout,
 
 		// FPS Calculation setup
-		RecentFrameTimes: make([]time.Time, 0, 30), // Keep last 30 frame timestamps
-		FPSWindowSize:    30,                       // Use 30 frames for FPS calculation
-		AIFrameCounter:   0,                        // Initialize AI frame counter
+		RecentFrameTimes: make([]time.Time, 0, 30),
+		FPSWindowSize:    30,
+		AIFrameCounter:   0,
 
 		RawFrames:       make(chan *models.RawFrame, cm.cfg.FrameBufferSize),
 		ProcessedFrames: make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer),
+		AlertFrames:     make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer),
+		RecorderFrames:  make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer),
 		StopChannel:     make(chan struct{}),
 
 		// Generate MediaMTX URLs
@@ -145,10 +151,19 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 
 	cm.cameras[req.CameraID] = camera
 
+	// Start recording for this camera
+	if cm.recorder != nil {
+		if err := cm.recorder.StartRecording(req.CameraID); err != nil {
+			log.Error().Err(err).Str("camera_id", req.CameraID).Msg("Failed to start recording")
+		}
+	}
+
 	// Start pipeline components for this camera
 	go cm.runStreamReader(camera)
 	go cm.runFrameProcessor(camera)
 	go cm.runPublisher(camera)
+	go cm.runPostProcessor(camera)
+	go cm.runRecorderProcessor(camera)
 
 	log.Info().
 		Str("camera_id", req.CameraID).
@@ -187,14 +202,14 @@ func (cm *CameraManager) runStreamReader(camera *models.Camera) {
 		case <-camera.StopChannel:
 			return
 		default:
-			err := cm.startVideoCaptureProcess(camera)
+			err := cm.streamCapture.StartVideoCaptureProcess(camera)
 			if err != nil {
 				log.Error().Err(err).Str("camera_id", camera.ID).Msg("VideoCapture process failed")
 				camera.ErrorCount++
 				attempt++
 
 				// jittered exponential backoff within configured min/max
-				delay := cm.calculateBackoffDelay(attempt)
+				delay := cm.streamCapture.CalculateBackoffDelay(attempt)
 				log.Info().Str("camera_id", camera.ID).Dur("retry_in", delay).Int("attempt", attempt).Msg("Reconnecting to camera")
 
 				select {
@@ -207,168 +222,6 @@ func (cm *CameraManager) runStreamReader(camera *models.Camera) {
 				// success path resets attempts
 				attempt = 0
 			}
-		}
-	}
-}
-
-// startVideoCaptureProcess starts OpenCV VideoCapture similar
-func (cm *CameraManager) startVideoCaptureProcess(camera *models.Camera) error {
-	log.Info().
-		Str("camera_id", camera.ID).
-		Str("url", camera.URL).
-		Msg("Starting OpenCV VideoCapture with optimized settings")
-
-	// Create VideoCapture - handle webcam vs RTSP
-	var cap *gocv.VideoCapture
-	var err error
-
-	// RTSP case
-	log.Info().
-		Str("camera_id", camera.ID).
-		Str("rtsp_url", camera.URL).
-		Msg("Opening RTSP stream")
-
-	cap, err = gocv.OpenVideoCapture(camera.URL)
-	if err != nil {
-		return fmt.Errorf("failed to open RTSP stream %s: %w", camera.URL, err)
-	}
-	defer cap.Close()
-
-	// Set RTSP properties for low latency
-	cap.Set(gocv.VideoCaptureBufferSize, 1) // Minimal buffer
-	cap.Set(gocv.VideoCaptureFrameWidth, float64(cm.cfg.OutputWidth))
-	cap.Set(gocv.VideoCaptureFrameHeight, float64(cm.cfg.OutputHeight))
-
-	if !cap.IsOpened() {
-		return fmt.Errorf("video capture is not opened for camera %s", camera.ID)
-	}
-
-	// Get actual properties
-	actualFPS := cap.Get(gocv.VideoCaptureFPS)
-	actualWidth := cap.Get(gocv.VideoCaptureFrameWidth)
-	actualHeight := cap.Get(gocv.VideoCaptureFrameHeight)
-
-	log.Info().
-		Str("camera_id", camera.ID).
-		Float64("actual_fps", actualFPS).
-		Float64("actual_width", actualWidth).
-		Float64("actual_height", actualHeight).
-		Msg("VideoCapture opened successfully with actual properties")
-
-	// Frame reading loop
-	frameID := int64(0)
-	img := gocv.NewMat()
-	defer img.Close()
-
-	consecutiveErrors := 0
-	maxConsecutiveErrors := 10
-
-	for {
-		select {
-		case <-camera.StopChannel:
-			log.Info().Str("camera_id", camera.ID).Msg("Stopping VideoCapture reader due to stop signal")
-			return nil
-		default:
-			ok := cap.Read(&img)
-
-			if !ok {
-				consecutiveErrors++
-				log.Warn().
-					Str("camera_id", camera.ID).
-					Int("consecutive_errors", consecutiveErrors).
-					Msg("Failed to read frame from VideoCapture")
-
-				if consecutiveErrors >= maxConsecutiveErrors {
-					return fmt.Errorf("too many consecutive frame read errors (%d)", consecutiveErrors)
-				}
-
-				// Small delay before retry
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
-			if img.Empty() {
-				consecutiveErrors++
-				log.Warn().
-					Str("camera_id", camera.ID).
-					Int("consecutive_errors", consecutiveErrors).
-					Msg("Received empty frame from VideoCapture")
-
-				if consecutiveErrors >= maxConsecutiveErrors {
-					return fmt.Errorf("too many consecutive empty frames (%d)", consecutiveErrors)
-				}
-				continue
-			}
-
-			// Successfully read a frame
-			consecutiveErrors = 0
-			frameID++
-			camera.FrameCount++
-			camera.LastFrameTime = time.Now()
-
-			processedImg := gocv.NewMat()
-			if img.Cols() != cm.cfg.OutputWidth || img.Rows() != cm.cfg.OutputHeight {
-				gocv.Resize(img, &processedImg, image.Pt(cm.cfg.OutputWidth, cm.cfg.OutputHeight), 0, 0, gocv.InterpolationLinear)
-			} else {
-				processedImg = img.Clone()
-			}
-
-			// Convert to bytes (BGR)
-			frameData := processedImg.ToBytes()
-			processedImg.Close()
-
-			rawFrame := &models.RawFrame{
-				CameraID:  camera.ID,
-				Data:      frameData,
-				Timestamp: time.Now(),
-				FrameID:   frameID,
-				Width:     cm.cfg.OutputWidth,
-				Height:    cm.cfg.OutputHeight,
-				Format:    "BGR24",
-			}
-
-			// Send to processing pipeline
-			select {
-			case camera.RawFrames <- rawFrame:
-				log.Debug().
-					Str("camera_id", camera.ID).
-					Int64("frame_id", frameID).
-					Msg("Frame sent to processing pipeline")
-			default:
-				// Buffer is full - implement frame dropping for real-time streaming
-				droppedRaw := 0
-				// Drain some frames to make space for the latest
-			DrainRawLoop:
-				for len(camera.RawFrames) > cm.cfg.FrameBufferSize/2 {
-					select {
-					case <-camera.RawFrames:
-						droppedRaw++
-					default:
-						break DrainRawLoop
-					}
-				}
-
-				// Now try to send the current frame
-				select {
-				case camera.RawFrames <- rawFrame:
-					if droppedRaw > 0 {
-						log.Debug().
-							Str("camera_id", camera.ID).
-							Int64("frame_id", frameID).
-							Int("dropped_raw_frames", droppedRaw).
-							Msg("Dropped older raw frames for real-time capture")
-					}
-				default:
-					// Still full, just skip this frame
-					log.Debug().
-						Str("camera_id", camera.ID).
-						Int64("frame_id", frameID).
-						Msg("Skipped raw frame - buffer still full after draining")
-				}
-			}
-
-			targetInterval := time.Second / time.Duration(cm.getTargetFPS())
-			time.Sleep(targetInterval)
 		}
 	}
 }
@@ -386,28 +239,8 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 		}
 	}()
 
-	// Create per-camera detection service if AI is enabled for this camera
-	var detSvc *detection.Service
-	if camera.AIEnabled && camera.AIEndpoint != "" {
-		var err error
-		detSvc, err = detection.NewService(camera.AIEndpoint)
-		if err != nil {
-			log.Error().
-				Err(err).
-				Str("camera_id", camera.ID).
-				Str("ai_endpoint", camera.AIEndpoint).
-				Msg("Failed to create detection service for camera, AI will be disabled")
-			camera.AIEnabled = false
-		} else {
-			log.Info().
-				Str("camera_id", camera.ID).
-				Str("ai_endpoint", camera.AIEndpoint).
-				Msg("AI detection service initialized for camera")
-		}
-	}
-
-	// Create per-camera frame processor with AI service
-	frameProcessor, err := NewFrameProcessorWithDetectionService(cm.cfg, detSvc, camera)
+	// Create per-camera frame processor
+	frameProcessor, err := NewFrameProcessorWithCamera(cm.cfg, camera)
 	if err != nil {
 		log.Error().
 			Err(err).
@@ -420,9 +253,6 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 	for {
 		select {
 		case <-camera.StopChannel:
-			if detSvc != nil {
-				detSvc.Shutdown(context.Background())
-			}
 			return
 		case rawFrame := <-camera.RawFrames:
 			// FRAME SKIPPING: Always get the latest frame by draining the buffer
@@ -452,7 +282,7 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 			startTime := time.Now()
 
 			// Update camera statistics first
-			camera.FPS = cm.calculateFPS(camera)
+			camera.FPS = cm.streamCapture.CalculateFPS(camera)
 			camera.Latency = time.Since(latestFrame.Timestamp)
 
 			// Process the latest frame with current stats and per-camera AI settings
@@ -509,6 +339,64 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 					log.Warn().Str("camera_id", camera.ID).Msg("Still could not send to publisher after draining")
 				}
 			}
+
+			// Send to alerts
+			select {
+			case camera.AlertFrames <- processedFrame:
+			default:
+				// If alert buffer is full, drain it and put the latest frame
+				drainedAlert := 0
+			DrainAlert:
+				for {
+					select {
+					case <-camera.AlertFrames:
+						drainedAlert++
+					default:
+						break DrainAlert
+					}
+				}
+				// Now try to send the latest frame
+				select {
+				case camera.AlertFrames <- processedFrame:
+					if drainedAlert > 0 {
+						log.Debug().
+							Str("camera_id", camera.ID).
+							Int("drained_alert_frames", drainedAlert).
+							Msg("Drained alert buffer for real-time streaming")
+					}
+				default:
+					log.Warn().Str("camera_id", camera.ID).Msg("Still could not send to alerts after draining")
+				}
+			}
+
+			// Send to recorder
+			select {
+			case camera.RecorderFrames <- processedFrame:
+			default:
+				// If recorder buffer is full, drain it and put the latest frame
+				drainedRecorder := 0
+			DrainRecorder:
+				for {
+					select {
+					case <-camera.RecorderFrames:
+						drainedRecorder++
+					default:
+						break DrainRecorder
+					}
+				}
+				// Now try to send the latest frame
+				select {
+				case camera.RecorderFrames <- processedFrame:
+					if drainedRecorder > 0 {
+						log.Debug().
+							Str("camera_id", camera.ID).
+							Int("drained_recorder_frames", drainedRecorder).
+							Msg("Drained recorder buffer for real-time streaming")
+					}
+				default:
+					log.Warn().Str("camera_id", camera.ID).Msg("Still could not send to recorder after draining")
+				}
+			}
 		}
 	}
 }
@@ -540,47 +428,171 @@ func (cm *CameraManager) runPublisher(camera *models.Camera) {
 	}
 }
 
-// getTargetFPS returns target FPS based on AI status
-func (cm *CameraManager) getTargetFPS() int {
-	if cm.cfg.AIEnabled && len(cm.cameras) > 0 {
-		// Check if any camera has AI projects
-		for _, camera := range cm.cameras {
-			if len(camera.Projects) > 0 {
-				return cm.cfg.MaxFPSWithAI
+// runPostProcessor processes frames for alerts in parallel to publishing
+func (cm *CameraManager) runPostProcessor(camera *models.Camera) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Str("camera_id", camera.ID).
+				Msg("Post processor panic recovered")
+			// ensure we don't hot-loop restarts
+			time.Sleep(cm.cfg.PanicRestartDelay)
+		}
+	}()
+
+	for {
+		select {
+		case <-camera.StopChannel:
+			return
+		case processedFrame := <-camera.AlertFrames:
+			// Use new post-processing service with detection-only processing
+			if cm.postProcessingService != nil {
+				aiResult, ok := processedFrame.AIDetections.(*AIProcessingResult)
+				if !ok || len(aiResult.Detections) == 0 {
+					continue
+				}
+
+				// No conversion needed! Frame processor already outputs models.Detection
+				detections := aiResult.Detections
+
+				// Create frame metadata
+				frameMetadata := models.FrameMetadata{
+					FrameID:     processedFrame.FrameID,
+					Timestamp:   processedFrame.Timestamp,
+					Width:       processedFrame.Width,
+					Height:      processedFrame.Height,
+					AllDetCount: len(aiResult.Detections),
+					CameraID:    camera.ID,
+				}
+
+				// Use new detection-only processing with frame data for images
+				result := cm.postProcessingService.ProcessDetections(
+					camera.ID,
+					detections,
+					frameMetadata,
+					processedFrame.Data, // Pass frame data for context and detection images
+				)
+
+				// Log processing results
+				if len(result.Errors) > 0 {
+					log.Warn().
+						Str("camera_id", camera.ID).
+						Strs("errors", result.Errors).
+						Msg("Alert processing had errors")
+				}
+
+				if result.AlertsCreated > 0 {
+					log.Debug().
+						Str("camera_id", camera.ID).
+						Int("alerts_created", result.AlertsCreated).
+						Int("valid_detections", result.ValidDetections).
+						Int("suppressed_detections", result.SuppressedDetections).
+						Msg("Alert processing completed")
+				}
 			}
 		}
 	}
-	return cm.cfg.MaxFPSNoAI
 }
 
-// calculateFPS calculates current FPS for a camera using rolling window
-func (cm *CameraManager) calculateFPS(camera *models.Camera) float64 {
-	if camera.FrameCount < 2 {
-		return 0
+// runRecorderProcessor processes frames for video recording in parallel
+func (cm *CameraManager) runRecorderProcessor(camera *models.Camera) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Interface("panic", r).
+				Str("camera_id", camera.ID).
+				Msg("Recorder processor panic recovered")
+			time.Sleep(cm.cfg.PanicRestartDelay)
+		}
+	}()
+
+	for {
+		select {
+		case <-camera.StopChannel:
+			// Stop recording when camera stops
+			if cm.recorder != nil {
+				if err := cm.recorder.StopRecording(camera.ID); err != nil {
+					log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to stop recording")
+				}
+			}
+			return
+		case processedFrame := <-camera.RecorderFrames:
+			// Send the actual frame data to recorder for processing
+			if cm.recorder != nil {
+				if err := cm.recorder.ProcessFrame(camera.ID, processedFrame); err != nil {
+					log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to process frame for recording")
+				}
+			}
+		}
+	}
+}
+
+// Shutdown gracefully shuts down the camera manager
+func (cm *CameraManager) Shutdown(ctx context.Context) error {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	log.Info().Msg("Shutting down camera manager")
+
+	// Stop all cameras
+	for _, camera := range cm.cameras {
+		cm.stopCameraInternal(camera)
 	}
 
-	// Add current timestamp to the rolling window
-	now := time.Now()
-	camera.RecentFrameTimes = append(camera.RecentFrameTimes, now)
+	return nil
+}
 
-	// Keep only the most recent N timestamps
-	if len(camera.RecentFrameTimes) > camera.FPSWindowSize {
-		camera.RecentFrameTimes = camera.RecentFrameTimes[1:]
+// stopCameraInternal stops camera internal processes
+func (cm *CameraManager) stopCameraInternal(camera *models.Camera) {
+	if camera == nil {
+		return
 	}
 
-	// Need at least 2 timestamps to calculate FPS
-	if len(camera.RecentFrameTimes) < 2 {
-		return 0
+	camera.IsActive = false
+
+	// Stop all processes
+	close(camera.StopChannel)
+
+	// Close channels
+	close(camera.RawFrames)
+	close(camera.ProcessedFrames)
+	close(camera.AlertFrames)
+	close(camera.RecorderFrames)
+}
+
+// GetCamera returns camera information
+func (cm *CameraManager) GetCamera(cameraID string) (*models.CameraResponse, error) {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+
+	camera, exists := cm.cameras[cameraID]
+	if !exists {
+		return nil, fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	// Calculate FPS based on time difference between first and last timestamp in window
-	timeSpan := camera.RecentFrameTimes[len(camera.RecentFrameTimes)-1].Sub(camera.RecentFrameTimes[0]).Seconds()
-	if timeSpan > 0 {
-		frameCount := float64(len(camera.RecentFrameTimes) - 1)
-		return frameCount / timeSpan
-	}
-
-	return 0
+	return &models.CameraResponse{
+		CameraID:         camera.ID,
+		URL:              camera.URL,
+		Projects:         camera.Projects,
+		IsActive:         camera.IsActive,
+		CreatedAt:        camera.CreatedAt,
+		LastFrameTime:    camera.LastFrameTime,
+		FrameCount:       camera.FrameCount,
+		ErrorCount:       camera.ErrorCount,
+		FPS:              camera.FPS,
+		Latency:          camera.Latency.String(),
+		AIEnabled:        camera.AIEnabled,
+		AIEndpoint:       camera.AIEndpoint,
+		AITimeout:        camera.AITimeout.String(),
+		AIProcessingTime: camera.AIProcessingTime.String(),
+		LastAIError:      camera.LastAIError,
+		AIDetectionCount: camera.AIDetectionCount,
+		RTSPUrl:          camera.RTSPUrl,
+		WebRTCUrl:        camera.WebRTCUrl,
+		HLSUrl:           camera.HLSUrl,
+		MJPEGUrl:         camera.MJPEGUrl,
+	}, nil
 }
 
 // StopCamera stops a camera and its pipeline
@@ -600,75 +612,6 @@ func (cm *CameraManager) StopCamera(cameraID string) error {
 	return nil
 }
 
-// stopCameraInternal stops camera internal processes
-func (cm *CameraManager) stopCameraInternal(camera *models.Camera) {
-	if camera == nil {
-		return
-	}
-
-	camera.IsActive = false
-
-	// Stop all processes
-	close(camera.StopChannel)
-
-	// Close channels
-	close(camera.RawFrames)
-	close(camera.ProcessedFrames)
-}
-
-// GetCamera returns camera information
-func (cm *CameraManager) GetCamera(cameraID string) (*models.CameraResponse, error) {
-	cm.mutex.RLock()
-	defer cm.mutex.RUnlock()
-
-	camera, exists := cm.cameras[cameraID]
-	if !exists {
-		return nil, fmt.Errorf("camera %s not found", cameraID)
-	}
-
-	return &models.CameraResponse{
-		CameraID:      camera.ID,
-		URL:           camera.URL,
-		Projects:      camera.Projects,
-		IsActive:      camera.IsActive,
-		CreatedAt:     camera.CreatedAt,
-		LastFrameTime: camera.LastFrameTime,
-		FrameCount:    camera.FrameCount,
-		ErrorCount:    camera.ErrorCount,
-		FPS:           camera.FPS,
-		Latency:       camera.Latency.String(),
-
-		// AI Configuration
-		AIEnabled:        camera.AIEnabled,
-		AIEndpoint:       camera.AIEndpoint,
-		AITimeout:        camera.AITimeout.String(),
-		AIProcessingTime: camera.AIProcessingTime.String(),
-		LastAIError:      camera.LastAIError,
-		AIDetectionCount: camera.AIDetectionCount,
-
-		RTSPUrl:   camera.RTSPUrl,
-		WebRTCUrl: camera.WebRTCUrl,
-		HLSUrl:    camera.HLSUrl,
-		MJPEGUrl:  camera.MJPEGUrl,
-	}, nil
-}
-
-// ListCameras returns all cameras
-func (cm *CameraManager) ListCameras() []*models.CameraResponse {
-	cm.mutex.RLock()
-	defer cm.mutex.RUnlock()
-
-	cameras := make([]*models.CameraResponse, 0, len(cm.cameras))
-	for _, camera := range cm.cameras {
-		resp, _ := cm.GetCamera(camera.ID)
-		if resp != nil {
-			cameras = append(cameras, resp)
-		}
-	}
-
-	return cameras
-}
-
 // GetStats returns camera statistics
 func (cm *CameraManager) GetStats() (int, int) {
 	cm.mutex.RLock()
@@ -684,75 +627,67 @@ func (cm *CameraManager) GetStats() (int, int) {
 	return active, len(cm.cameras)
 }
 
-// Shutdown shuts down the camera manager
-func (cm *CameraManager) Shutdown(ctx context.Context) error {
-	log.Info().Msg("Shutting down camera manager")
+// GetCameras returns all cameras
+func (cm *CameraManager) GetCameras() []*models.CameraResponse {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
 
-	// Stop all cameras
-	cm.mutex.Lock()
+	cameras := make([]*models.CameraResponse, 0, len(cm.cameras))
 	for _, camera := range cm.cameras {
-		cm.stopCameraInternal(camera)
+		cameras = append(cameras, &models.CameraResponse{
+			CameraID:         camera.ID,
+			URL:              camera.URL,
+			Projects:         camera.Projects,
+			IsActive:         camera.IsActive,
+			CreatedAt:        camera.CreatedAt,
+			LastFrameTime:    camera.LastFrameTime,
+			FrameCount:       camera.FrameCount,
+			ErrorCount:       camera.ErrorCount,
+			FPS:              camera.FPS,
+			Latency:          camera.Latency.String(),
+			AIEnabled:        camera.AIEnabled,
+			AIEndpoint:       camera.AIEndpoint,
+			AITimeout:        camera.AITimeout.String(),
+			AIProcessingTime: camera.AIProcessingTime.String(),
+			LastAIError:      camera.LastAIError,
+			AIDetectionCount: camera.AIDetectionCount,
+			RTSPUrl:          camera.RTSPUrl,
+			WebRTCUrl:        camera.WebRTCUrl,
+			HLSUrl:           camera.HLSUrl,
+			MJPEGUrl:         camera.MJPEGUrl,
+		})
 	}
-	cm.cameras = make(map[string]*models.Camera)
-	cm.mutex.Unlock()
 
-	// Shutdown pipeline components
-	if cm.frameProcessor != nil {
-		cm.frameProcessor.Shutdown()
-	}
-
-	if cm.publisher != nil {
-		cm.publisher.Shutdown()
-	}
-
-	close(cm.stopChannel)
-
-	return nil
+	return cameras
 }
 
-func (cm *CameraManager) PublisherStreamMJPEG(w http.ResponseWriter, r *http.Request, cameraID string) {
-	if cm.publisher == nil {
-		http.Error(w, "publisher not available", http.StatusServiceUnavailable)
-		return
-	}
-	cm.publisher.StreamMJPEGHTTP(w, r, cameraID)
-}
-
-// UpdateCameraAI updates AI configuration for a specific camera
-func (cm *CameraManager) UpdateCameraAI(cameraID string, req *models.AIConfigRequest) error {
+// UpdateAIConfig updates AI configuration for a camera
+func (cm *CameraManager) UpdateAIConfig(cameraID string, config *models.AIConfigRequest) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
 	camera, exists := cm.cameras[cameraID]
 	if !exists {
-		return fmt.Errorf("camera not found")
+		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	// Update AI enabled flag
-	if req.AIEnabled != nil {
-		camera.AIEnabled = *req.AIEnabled
+	// Update AI configuration
+	if config.AIEnabled != nil {
+		camera.AIEnabled = *config.AIEnabled
 	}
 
-	// Update AI endpoint
-	if req.AIEndpoint != nil && *req.AIEndpoint != "" {
-		camera.AIEndpoint = *req.AIEndpoint
+	if config.AIEndpoint != nil {
+		camera.AIEndpoint = *config.AIEndpoint
 	}
 
-	// Update AI timeout
-	if req.AITimeout != nil && *req.AITimeout != "" {
-		if parsed, err := time.ParseDuration(*req.AITimeout); err == nil {
+	if config.AITimeout != nil {
+		if parsed, err := time.ParseDuration(*config.AITimeout); err == nil {
 			camera.AITimeout = parsed
-		} else {
-			log.Warn().
-				Str("camera_id", cameraID).
-				Str("invalid_timeout", *req.AITimeout).
-				Msg("Invalid AI timeout format, keeping current value")
 		}
 	}
 
-	// Update projects
-	if req.Projects != nil {
-		camera.Projects = req.Projects
+	if config.Projects != nil {
+		camera.Projects = config.Projects
 	}
 
 	log.Info().
@@ -766,14 +701,14 @@ func (cm *CameraManager) UpdateCameraAI(cameraID string, req *models.AIConfigReq
 	return nil
 }
 
-// GetCameraAI gets AI configuration for a specific camera
-func (cm *CameraManager) GetCameraAI(cameraID string) (*models.AIConfigResponse, error) {
+// GetAIConfig returns AI configuration for a camera
+func (cm *CameraManager) GetAIConfig(cameraID string) (*models.AIConfigResponse, error) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
 	camera, exists := cm.cameras[cameraID]
 	if !exists {
-		return nil, fmt.Errorf("camera not found")
+		return nil, fmt.Errorf("camera %s not found", cameraID)
 	}
 
 	return &models.AIConfigResponse{
@@ -788,89 +723,76 @@ func (cm *CameraManager) GetCameraAI(cameraID string) (*models.AIConfigResponse,
 	}, nil
 }
 
-// ToggleCameraAI toggles AI processing for a specific camera
-func (cm *CameraManager) ToggleCameraAI(cameraID string) error {
-	cm.mutex.Lock()
-	defer cm.mutex.Unlock()
-
-	camera, exists := cm.cameras[cameraID]
-	if !exists {
-		return fmt.Errorf("camera not found")
+// ServeHTTP serves MJPEG stream for a camera
+func (cm *CameraManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Extract camera ID from URL path
+	// URL format: /mjpeg/:camera_id
+	path := r.URL.Path
+	if len(path) < 8 || path[:7] != "/mjpeg/" {
+		http.Error(w, "Invalid MJPEG URL format", http.StatusBadRequest)
+		return
 	}
 
-	camera.AIEnabled = !camera.AIEnabled
+	cameraID := path[7:] // Remove "/mjpeg/" prefix
+	if cameraID == "" {
+		http.Error(w, "Camera ID is required", http.StatusBadRequest)
+		return
+	}
 
-	log.Info().
-		Str("camera_id", cameraID).
-		Bool("ai_enabled", camera.AIEnabled).
-		Msg("Camera AI toggled")
+	// Check if camera exists
+	cm.mutex.RLock()
+	camera, exists := cm.cameras[cameraID]
+	cm.mutex.RUnlock()
 
-	return nil
+	if !exists {
+		http.Error(w, fmt.Sprintf("Camera %s not found", cameraID), http.StatusNotFound)
+		return
+	}
+
+	if !camera.IsActive {
+		http.Error(w, fmt.Sprintf("Camera %s is not active", cameraID), http.StatusServiceUnavailable)
+		return
+	}
+
+	// Delegate to publisher for actual MJPEG streaming
+	if cm.publisher == nil {
+		http.Error(w, "Publisher service not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	cm.publisher.StreamMJPEGHTTP(w, r, cameraID)
 }
 
-// runWatchdog periodically checks cameras for staleness and triggers restart via Stop+Start
+// runWatchdog monitors camera health and handles cleanup
 func (cm *CameraManager) runWatchdog() {
 	ticker := time.NewTicker(cm.cfg.HealthCheckInterval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-cm.stopChannel:
 			return
 		case <-ticker.C:
-			now := time.Now()
-			cm.mutex.RLock()
-			cameras := make([]*models.Camera, 0, len(cm.cameras))
-			for _, c := range cm.cameras {
-				cameras = append(cameras, c)
-			}
-			cm.mutex.RUnlock()
-
-			for _, cam := range cameras {
-				// If active camera hasn't produced a frame recently, restart its stream reader by nudging attempt loop
-				if cam.IsActive && !cam.LastFrameTime.IsZero() {
-					if now.Sub(cam.LastFrameTime) > cm.cfg.FrameStaleThreshold {
-						log.Warn().Str("camera_id", cam.ID).Dur("stale_for", now.Sub(cam.LastFrameTime)).Msg("Camera stream appears stale; scheduling reconnect")
-						// Soft reset by closing and recreating reader loop: stop and start
-						// We avoid deleting from map to keep configuration
-						_ = cm.StopCamera(cam.ID)
-						// Give a small delay to release resources
-						time.Sleep(300 * time.Millisecond)
-						_ = cm.StartCamera(&models.CameraRequest{CameraID: cam.ID, URL: cam.URL, Projects: cam.Projects})
-					}
-				}
-			}
+			cm.checkCameraHealth()
 		}
 	}
 }
 
-// calculateBackoffDelay returns bounded exponential backoff with jitter
-func (cm *CameraManager) calculateBackoffDelay(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
+// checkCameraHealth checks health of all cameras
+func (cm *CameraManager) checkCameraHealth() {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+
+	now := time.Now()
+	for _, camera := range cm.cameras {
+		if camera.IsActive && !camera.LastFrameTime.IsZero() {
+			timeSinceLastFrame := now.Sub(camera.LastFrameTime)
+			if timeSinceLastFrame > cm.cfg.FrameStaleThreshold {
+				log.Warn().
+					Str("camera_id", camera.ID).
+					Dur("time_since_last_frame", timeSinceLastFrame).
+					Msg("Camera appears to be stale - no recent frames")
+			}
+		}
 	}
-	// base = min * 2^(attempt-1)
-	base := float64(cm.cfg.ReconnectBackoffMin) * math.Pow(2, float64(attempt-1))
-	max := float64(cm.cfg.ReconnectBackoffMax)
-	if base > max {
-		base = max
-	}
-	// jitter percentage
-	pct := cm.cfg.ReconnectJitterPct
-	if pct < 0 {
-		pct = 0
-	}
-	if pct > 100 {
-		pct = 100
-	}
-	jitterRange := base * float64(pct) / 100.0
-	// random in [-jitterRange, +jitterRange]
-	jitter := (rand.Float64()*2 - 1) * jitterRange
-	d := time.Duration(base + jitter)
-	if d < cm.cfg.ReconnectBackoffMin {
-		d = cm.cfg.ReconnectBackoffMin
-	}
-	if d > cm.cfg.ReconnectBackoffMax {
-		d = cm.cfg.ReconnectBackoffMax
-	}
-	return d
 }
