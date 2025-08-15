@@ -118,6 +118,18 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		}
 	}
 
+	// Configure recording settings
+	enableRecord := true // Default to enabled
+	if req.EnableRecord != nil {
+		enableRecord = *req.EnableRecord
+	}
+
+	// Configure status
+	status := "start" // Default to start
+	if req.Status != nil && *req.Status != "" {
+		status = *req.Status
+	}
+
 	// Create camera with pipeline channels
 	camera := &models.Camera{
 		ID:        req.CameraID,
@@ -125,6 +137,12 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		Projects:  req.Projects,
 		IsActive:  true,
 		CreatedAt: time.Now(),
+
+		// Status and Recording Configuration
+		Status:       status,
+		EnableRecord: enableRecord,
+		IsRecording:  false, // Will be set when recording actually starts
+		IsPaused:     status == "paused",
 
 		// AI Configuration
 		AIEnabled:  aiEnabled,
@@ -151,10 +169,12 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 
 	cm.cameras[req.CameraID] = camera
 
-	// Start recording for this camera
-	if cm.recorder != nil {
+	// Start recording for this camera only if enabled and not paused
+	if cm.recorder != nil && enableRecord && status != "paused" {
 		if err := cm.recorder.StartRecording(req.CameraID); err != nil {
 			log.Error().Err(err).Str("camera_id", req.CameraID).Msg("Failed to start recording")
+		} else {
+			camera.IsRecording = true
 		}
 	}
 
@@ -518,10 +538,21 @@ func (cm *CameraManager) runRecorderProcessor(camera *models.Camera) {
 			}
 			return
 		case processedFrame := <-camera.RecorderFrames:
+			// Only process frames if recording is enabled and camera is in recording state
+			if !camera.EnableRecord || camera.Status == "paused" || camera.Status == "stop" || !camera.IsRecording {
+				// Skip frame processing when recording is disabled or camera is paused/stopped
+				continue
+			}
+
 			// Send the actual frame data to recorder for processing
 			if cm.recorder != nil {
 				if err := cm.recorder.ProcessFrame(camera.ID, processedFrame); err != nil {
-					log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to process frame for recording")
+					// Only log as debug if it's just that recording is not active (expected behavior)
+					if err.Error() == fmt.Sprintf("camera %s is not recording", camera.ID) {
+						log.Debug().Str("camera_id", camera.ID).Msg("Skipping frame - recording not active")
+					} else {
+						log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to process frame for recording")
+					}
 				}
 			}
 		}
@@ -576,6 +607,10 @@ func (cm *CameraManager) GetCamera(cameraID string) (*models.CameraResponse, err
 		URL:              camera.URL,
 		Projects:         camera.Projects,
 		IsActive:         camera.IsActive,
+		Status:           camera.Status,
+		IsRecording:      camera.IsRecording,
+		IsPaused:         camera.IsPaused,
+		EnableRecord:     camera.EnableRecord,
 		CreatedAt:        camera.CreatedAt,
 		LastFrameTime:    camera.LastFrameTime,
 		FrameCount:       camera.FrameCount,
@@ -639,6 +674,10 @@ func (cm *CameraManager) GetCameras() []*models.CameraResponse {
 			URL:              camera.URL,
 			Projects:         camera.Projects,
 			IsActive:         camera.IsActive,
+			Status:           camera.Status,
+			IsRecording:      camera.IsRecording,
+			IsPaused:         camera.IsPaused,
+			EnableRecord:     camera.EnableRecord,
 			CreatedAt:        camera.CreatedAt,
 			LastFrameTime:    camera.LastFrameTime,
 			FrameCount:       camera.FrameCount,
@@ -796,3 +835,126 @@ func (cm *CameraManager) checkCameraHealth() {
 		}
 	}
 }
+
+// UpdateCameraSettings updates camera settings dynamically without restart
+func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.CameraUpdateRequest) error {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	camera, exists := cm.cameras[cameraID]
+	if !exists {
+		return fmt.Errorf("camera %s not found", cameraID)
+	}
+
+	// Update URL if provided (requires restart of stream reader)
+	if req.URL != nil && *req.URL != camera.URL {
+		oldURL := camera.URL
+		camera.URL = *req.URL
+
+		// Need to restart stream reader with new URL
+		log.Info().
+			Str("camera_id", cameraID).
+			Str("old_url", oldURL).
+			Str("new_url", *req.URL).
+			Msg("Camera URL updated, stream will reconnect")
+	}
+
+	// Update projects
+	if req.Projects != nil {
+		camera.Projects = req.Projects
+	}
+
+	// Update AI configuration
+	if req.AIEnabled != nil {
+		camera.AIEnabled = *req.AIEnabled
+	}
+
+	if req.AIEndpoint != nil {
+		camera.AIEndpoint = *req.AIEndpoint
+	}
+
+	if req.AITimeout != nil {
+		if parsed, err := time.ParseDuration(*req.AITimeout); err == nil {
+			camera.AITimeout = parsed
+		}
+	}
+
+	// Update recording settings
+	if req.EnableRecord != nil {
+		oldEnableRecord := camera.EnableRecord
+		camera.EnableRecord = *req.EnableRecord
+
+		// Handle recording state change
+		if *req.EnableRecord && !oldEnableRecord && camera.Status != "paused" && camera.IsActive {
+			// Enable recording
+			if cm.recorder != nil && !camera.IsRecording {
+				if err := cm.recorder.StartRecording(cameraID); err != nil {
+					log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to start recording after enable")
+				} else {
+					camera.IsRecording = true
+				}
+			}
+		} else if !*req.EnableRecord && oldEnableRecord {
+			// Disable recording
+			if cm.recorder != nil && camera.IsRecording {
+				if err := cm.recorder.StopRecording(cameraID); err != nil {
+					log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to stop recording after disable")
+				} else {
+					camera.IsRecording = false
+				}
+			}
+		}
+	}
+
+	// Update status
+	if req.Status != nil {
+		oldStatus := camera.Status
+		camera.Status = *req.Status
+		camera.IsPaused = *req.Status == "paused"
+
+		// Handle status change effects on recording
+		if camera.EnableRecord && cm.recorder != nil {
+			switch *req.Status {
+			case "start":
+				if oldStatus == "paused" && !camera.IsRecording {
+					// Resume from pause
+					if err := cm.recorder.StartRecording(cameraID); err != nil {
+						log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to resume recording")
+					} else {
+						camera.IsRecording = true
+					}
+				}
+			case "paused":
+				if camera.IsRecording {
+					// Pause recording
+					if err := cm.recorder.StopRecording(cameraID); err != nil {
+						log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to pause recording")
+					} else {
+						camera.IsRecording = false
+					}
+				}
+			case "stop":
+				if camera.IsRecording {
+					// Stop recording
+					if err := cm.recorder.StopRecording(cameraID); err != nil {
+						log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to stop recording")
+					} else {
+						camera.IsRecording = false
+					}
+				}
+			}
+		}
+	}
+
+	log.Info().
+		Str("camera_id", cameraID).
+		Str("status", camera.Status).
+		Bool("enable_record", camera.EnableRecord).
+		Bool("is_recording", camera.IsRecording).
+		Bool("is_paused", camera.IsPaused).
+		Msg("Camera settings updated dynamically")
+
+	return nil
+}
+
+// RecordingStats contains statistics about a recording session

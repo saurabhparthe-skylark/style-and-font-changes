@@ -67,19 +67,30 @@ func (s *Server) setupRoutes() {
 	cameraHandler := handlers.NewCameraHandler(s.container.CameraManager)
 	cameraGroup := s.router.Group("cameras")
 	{
-		cameraGroup.POST("/start", cameraHandler.StartCamera)
-		cameraGroup.POST("/:camera_id/stop", cameraHandler.StopCamera)
-		cameraGroup.GET("", cameraHandler.ListCameras)
-		cameraGroup.GET("/:camera_id", cameraHandler.GetCamera)
-		cameraGroup.GET("/stats", cameraHandler.GetCameraStats)
-		cameraGroup.GET("/:camera_id/ai", cameraHandler.GetCameraAI)
-		cameraGroup.PUT("/:camera_id/ai", cameraHandler.UpdateCameraAI)
-		cameraGroup.POST("/:camera_id/ai/toggle", cameraHandler.ToggleCameraAI)
+		cameraGroup.POST("", cameraHandler.StartCamera)                         // Create/start camera
+		cameraGroup.POST("/:camera_id/stop", cameraHandler.StopCamera)          // Stop/delete camera
+		cameraGroup.GET("", cameraHandler.ListCameras)                          // List all cameras
+		cameraGroup.GET("/:camera_id", cameraHandler.GetCamera)                 // Get camera details
+		cameraGroup.PUT("/:camera_id", cameraHandler.UpdateCamera)              // Update any camera settings
+		cameraGroup.GET("/stats", cameraHandler.GetCameraStats)                 // Camera statistics
+		cameraGroup.GET("/:camera_id/ai", cameraHandler.GetCameraAI)            // Get AI config
+		cameraGroup.PUT("/:camera_id/ai", cameraHandler.UpdateCameraAI)         // Update AI config
+		cameraGroup.POST("/:camera_id/ai/toggle", cameraHandler.ToggleCameraAI) // Toggle AI (legacy)
 	}
 	s.router.GET("/mjpeg/:camera_id", func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		s.container.CameraManager.ServeHTTP(c.Writer, c.Request)
 	})
+
+	// Video endpoints for recorded content
+	videoHandler := handlers.NewVideoHandler(s.cfg, s.container.RecorderSvc)
+	videoGroup := s.router.Group("/videos")
+	{
+		videoGroup.GET("/:camera_id/chunks", videoHandler.GetCameraChunks)
+		videoGroup.GET("/:camera_id/chunks/:chunk_id/stream", videoHandler.StreamChunk)
+		videoGroup.GET("/:camera_id/playlist.m3u8", videoHandler.GetHLSPlaylist)
+		videoGroup.GET("/:camera_id/playlist/info", videoHandler.GetPlaylistInfo)
+	}
 
 	// Dynamic Swagger URL based on request host to allow access from any IP
 	s.router.GET("/swagger/*any", func(c *gin.Context) {

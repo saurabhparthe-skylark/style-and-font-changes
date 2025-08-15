@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +30,6 @@ func NewCameraHandler(cameraManager *camera.CameraManager) *CameraHandler {
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 500 {object} models.ErrorResponse
 // @Router /cameras [post]
-// @Router /cameras/start [post]
 func (h *CameraHandler) StartCamera(c *gin.Context) {
 	var req models.CameraRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -256,4 +256,53 @@ func (h *CameraHandler) ToggleCameraAI(c *gin.Context) {
 	}
 	log.Info().Str("camera_id", cameraID).Bool("ai_enabled", aiConfig.AIEnabled).Msg("camera_ai_toggled")
 	c.JSON(http.StatusOK, aiConfig)
+}
+
+// UpdateCamera godoc
+// @Summary Update camera settings dynamically
+// @Description Update any camera settings dynamically without restart - supports URL changes, AI config, recording control, status management (start/stop/pause), and project updates
+// @Tags cameras
+// @Accept json
+// @Produce json
+// @Param camera_id path string true "Camera ID"
+// @Param settings body models.CameraUpdateRequest true "Camera update settings (all fields optional)"
+// @Success 200 {object} models.CameraResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 404 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /cameras/{camera_id} [put]
+func (h *CameraHandler) UpdateCamera(c *gin.Context) {
+	cameraID := c.Param("camera_id")
+	if cameraID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "camera_id is required"})
+		return
+	}
+
+	var req models.CameraUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Error().Err(err).Str("camera_id", cameraID).Msg("invalid_camera_update_request")
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.cameraManager.UpdateCameraSettings(cameraID, &req); err != nil {
+		if err.Error() == fmt.Sprintf("camera %s not found", cameraID) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found"})
+			return
+		}
+		log.Error().Err(err).Str("camera_id", cameraID).Msg("update_camera_failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Return updated camera details
+	camera, err := h.cameraManager.GetCamera(cameraID)
+	if err != nil {
+		log.Error().Err(err).Str("camera_id", cameraID).Msg("get_camera_after_update_failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Camera updated but failed to get details"})
+		return
+	}
+
+	log.Info().Str("camera_id", cameraID).Msg("camera_updated")
+	c.JSON(http.StatusOK, camera)
 }

@@ -10,6 +10,12 @@ type Camera struct {
 	IsActive  bool
 	CreatedAt time.Time
 
+	// Camera Status and Control
+	Status       string // "start", "stop", "paused"
+	IsRecording  bool
+	IsPaused     bool
+	EnableRecord bool // Whether recording is enabled for this camera
+
 	// AI Configuration (per-camera)
 	AIEnabled  bool
 	AIEndpoint string
@@ -81,12 +87,14 @@ type ProcessedFrame struct {
 
 // CameraRequest for API
 type CameraRequest struct {
-	CameraID   string   `json:"camera_id" binding:"required"`
-	URL        string   `json:"url" binding:"required"`
-	Projects   []string `json:"projects"`
-	AIEnabled  *bool    `json:"ai_enabled,omitempty"`  // Optional, defaults to config
-	AIEndpoint *string  `json:"ai_endpoint,omitempty"` // Optional, defaults to config
-	AITimeout  *string  `json:"ai_timeout,omitempty"`  // Optional, e.g., "5s"
+	CameraID     string   `json:"camera_id" binding:"required"`
+	URL          string   `json:"url" binding:"required"`
+	Projects     []string `json:"projects"`
+	EnableRecord *bool    `json:"enable_record,omitempty"` // Whether to enable recording
+	Status       *string  `json:"status,omitempty"`        // "start", "stop", "paused"
+	AIEnabled    *bool    `json:"ai_enabled,omitempty"`    // Optional, defaults to config
+	AIEndpoint   *string  `json:"ai_endpoint,omitempty"`   // Optional, defaults to config
+	AITimeout    *string  `json:"ai_timeout,omitempty"`    // Optional, e.g., "5s"
 }
 
 // CameraResponse for API
@@ -95,6 +103,10 @@ type CameraResponse struct {
 	URL           string    `json:"url"`
 	Projects      []string  `json:"projects"`
 	IsActive      bool      `json:"is_active"`
+	Status        string    `json:"status"`        // "start", "stop", "paused"
+	IsRecording   bool      `json:"is_recording"`  // Current recording state
+	IsPaused      bool      `json:"is_paused"`     // Current pause state
+	EnableRecord  bool      `json:"enable_record"` // Whether recording is enabled
 	CreatedAt     time.Time `json:"created_at"`
 	LastFrameTime time.Time `json:"last_frame_time"`
 	FrameCount    int64     `json:"frame_count"`
@@ -135,4 +147,15 @@ type AIConfigResponse struct {
 	AIProcessingTime string   `json:"ai_processing_time"`
 	LastAIError      string   `json:"last_ai_error,omitempty"`
 	AIDetectionCount int64    `json:"ai_detection_count"`
+}
+
+// CameraUpdateRequest for updating camera settings dynamically
+type CameraUpdateRequest struct {
+	URL          *string  `json:"url,omitempty"`           // Update RTSP URL
+	Projects     []string `json:"projects,omitempty"`      // Update projects
+	AIEnabled    *bool    `json:"ai_enabled,omitempty"`    // Update AI settings
+	AIEndpoint   *string  `json:"ai_endpoint,omitempty"`   // Update AI endpoint
+	AITimeout    *string  `json:"ai_timeout,omitempty"`    // Update AI timeout
+	EnableRecord *bool    `json:"enable_record,omitempty"` // Enable/disable recording
+	Status       *string  `json:"status,omitempty"`        // Update status: "start", "stop", "paused"
 }

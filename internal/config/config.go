@@ -85,9 +85,9 @@ type Config struct {
 	MaxTotalPayloadSize     int // bytes
 
 	// Video Recording
-	VideoOutputDir   string
-	VideoSegmentTime int // seconds per segment
-	VideoMaxSegments int // max segments to keep in playlist
+	VideoOutputDir string
+	VideoChunkTime int // seconds per video chunk (default: 60 seconds)
+	VideoMaxChunks int // max chunks to keep per camera
 
 	// Stream Output
 	OutputWidth   int
@@ -207,9 +207,9 @@ func Load() *Config {
 		MaxTotalPayloadSize:     getEnvInt("MAX_TOTAL_PAYLOAD_SIZE", 50*1024*1024),  // 50MB
 
 		// Video Recording
-		VideoOutputDir:   getEnv("VIDEO_OUTPUT_DIR", "/tmp/kepler-videos"),
-		VideoSegmentTime: getEnvInt("VIDEO_SEGMENT_TIME", 2),
-		VideoMaxSegments: getEnvInt("VIDEO_MAX_SEGMENTS", 10),
+		VideoOutputDir: getEnv("VIDEO_OUTPUT_DIR", "/home/skylark/worker-reim/kepler-worker-go/kepler-videos"),
+		VideoChunkTime: getEnvInt("VIDEO_CHUNK_TIME", 60), // 60 seconds per chunk
+		VideoMaxChunks: getEnvInt("VIDEO_MAX_CHUNKS", 50), // Keep 50 chunks per camera (~50 minutes)
 
 		// Stream Output
 		OutputWidth:   getEnvInt("OUTPUT_WIDTH", 1280),
