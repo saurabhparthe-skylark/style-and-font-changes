@@ -174,7 +174,7 @@ func Load() *Config {
 		ReconnectJitterPct:  getEnvInt("RECONNECT_JITTER_PCT", 20),
 
 		// Frame Processing
-		MaxFPSNoAI:       getEnvInt("MAX_FPS_NO_AI", 30),
+		MaxFPSNoAI:       getEnvInt("MAX_FPS_NO_AI", 10),
 		MaxFPSWithAI:     getEnvInt("MAX_FPS_WITH_AI", 10),
 		FrameBufferSize:  getEnvInt("FRAME_BUFFER_SIZE", 100),
 		ProcessingBuffer: getEnvInt("PROCESSING_BUFFER_SIZE", 50),
@@ -212,8 +212,8 @@ func Load() *Config {
 		VideoMaxChunks: getEnvInt("VIDEO_MAX_CHUNKS", 50), // Keep 50 chunks per camera (~50 minutes)
 
 		// Stream Output
-		OutputWidth:   getEnvInt("OUTPUT_WIDTH", 1280),
-		OutputHeight:  getEnvInt("OUTPUT_HEIGHT", 720),
+		OutputWidth:   getEnvInt("OUTPUT_WIDTH", 1920),
+		OutputHeight:  getEnvInt("OUTPUT_HEIGHT", 1080),
 		OutputQuality: getEnvInt("OUTPUT_QUALITY", 75),
 		OutputBitrate: getEnvInt("OUTPUT_BITRATE", 2000),
 

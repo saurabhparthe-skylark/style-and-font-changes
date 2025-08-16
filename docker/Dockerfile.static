@@ -1,0 +1,21 @@
+FROM golang:1.24
+
+RUN apt-get update && apt-get install -y \
+    libopencv-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN go install github.com/swaggo/swag/cmd/swag@latest
+RUN swag init -g internal/api/server.go -o docs/ --parseDependency --parseInternal
+
+RUN CGO_ENABLED=1 go build \
+    -ldflags "-X main.Version=${VERSION:-1.0.0} -X main.BuildTime=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.GitCommit=$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')" \
+    -o /kepler-worker \
+    ./cmd/worker

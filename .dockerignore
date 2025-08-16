@@ -1,0 +1,79 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Build artifacts
+bin/
+tmp/
+dist/
+build/
+
+# Development files
+.air.toml
+*.log
+build-errors.log
+
+# Documentation
+*.md
+README*
+docs/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Test files
+*_test.go
+test/
+testdata/
+coverage.out
+coverage.html
+
+# Logs and videos
+logs/
+kepler-videos/
+*.log
+
+# Local configuration
+.env
+.env.local
+.env.*.local
+
+# Node modules (if any)
+node_modules/
+
+# Docker files (avoid recursive copying)
+docker/
+Dockerfile*
+docker-compose*.yml
+
+# Temporary files
+*.tmp
+*.temp
+
+# Development tools
+tools/
+scripts/
+
+# Static analysis
+.golangci.yml
+
+# Air (hot reload) temp files
+tmp/
+
+# Backup files
+*.bak
+*.backup

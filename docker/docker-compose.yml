@@ -1,0 +1,33 @@
+services:
+  kepler-worker:
+    image: skylarklabs/kepler-worker-go:${VERSION:-1.0.0}
+    container_name: kepler-worker-go
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        - VERSION=${VERSION:-1.0.0}
+    env_file:
+      - ../.env
+    # environment:
+    #   - NATS_URL=nats://nats:4222
+    ports:
+      - "8000:8000"    # Main API
+      - "8080:8080"    # Logdy web interface (if enabled)
+    volumes:
+      - kepler-videos:/app/kepler-videos
+      - kepler-logs:/app/logs
+      - ./kepler.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  kepler-videos:
+    driver: local
+  kepler-logs:
+    driver: local
