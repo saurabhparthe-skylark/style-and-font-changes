@@ -700,68 +700,6 @@ func (cm *CameraManager) GetCameras() []*models.CameraResponse {
 	return cameras
 }
 
-// UpdateAIConfig updates AI configuration for a camera
-func (cm *CameraManager) UpdateAIConfig(cameraID string, config *models.AIConfigRequest) error {
-	cm.mutex.Lock()
-	defer cm.mutex.Unlock()
-
-	camera, exists := cm.cameras[cameraID]
-	if !exists {
-		return fmt.Errorf("camera %s not found", cameraID)
-	}
-
-	// Update AI configuration
-	if config.AIEnabled != nil {
-		camera.AIEnabled = *config.AIEnabled
-	}
-
-	if config.AIEndpoint != nil {
-		camera.AIEndpoint = *config.AIEndpoint
-	}
-
-	if config.AITimeout != nil {
-		if parsed, err := time.ParseDuration(*config.AITimeout); err == nil {
-			camera.AITimeout = parsed
-		}
-	}
-
-	if config.Projects != nil {
-		camera.Projects = config.Projects
-	}
-
-	log.Info().
-		Str("camera_id", cameraID).
-		Bool("ai_enabled", camera.AIEnabled).
-		Str("ai_endpoint", camera.AIEndpoint).
-		Dur("ai_timeout", camera.AITimeout).
-		Strs("projects", camera.Projects).
-		Msg("Camera AI configuration updated")
-
-	return nil
-}
-
-// GetAIConfig returns AI configuration for a camera
-func (cm *CameraManager) GetAIConfig(cameraID string) (*models.AIConfigResponse, error) {
-	cm.mutex.RLock()
-	defer cm.mutex.RUnlock()
-
-	camera, exists := cm.cameras[cameraID]
-	if !exists {
-		return nil, fmt.Errorf("camera %s not found", cameraID)
-	}
-
-	return &models.AIConfigResponse{
-		CameraID:         camera.ID,
-		AIEnabled:        camera.AIEnabled,
-		AIEndpoint:       camera.AIEndpoint,
-		AITimeout:        camera.AITimeout.String(),
-		Projects:         camera.Projects,
-		AIProcessingTime: camera.AIProcessingTime.String(),
-		LastAIError:      camera.LastAIError,
-		AIDetectionCount: camera.AIDetectionCount,
-	}, nil
-}
-
 // ServeHTTP serves MJPEG stream for a camera
 func (cm *CameraManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract camera ID from URL path
@@ -956,5 +894,3 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 
 	return nil
 }
-
-// RecordingStats contains statistics about a recording session

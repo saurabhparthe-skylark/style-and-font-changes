@@ -1,6 +1,6 @@
 SHELL := /usr/bin/fish
 
-.PHONY: build clean proto swagger run dev test fmt lint help build-static build-static-alpine build-static-pkgconfig build-minimal docker-build docker-build-static docker-push docker-push-static docker-push-all
+.PHONY: build clean proto swagger run dev test fmt lint help docker-build docker-build-static docker-push docker-run
 
 # Application configuration
 APP_NAME=kepler-worker
@@ -96,13 +96,14 @@ docker-build:
 docker-run:
 	cd docker && docker compose up -d
 
-## Build static Docker image and extract binary
-docker-build-static:
-	@mkdir -p $(BIN_DIR)
-	docker build -f docker/Dockerfile.static -t kepler-worker-static:$(VERSION) --build-arg VERSION=$(VERSION) .
-	docker run --rm -v $(PWD)/$(BIN_DIR):/output kepler-worker-static:$(VERSION) cp /kepler-worker /output/kepler-worker-static
-
 ## Push Docker image to Docker Hub
 docker-push:
 	docker push $(DOCKER_REGISTRY)/kepler-worker-go:$(VERSION)
 	docker push $(DOCKER_REGISTRY)/kepler-worker-go:latest
+
+## Build static Docker image and extract binary
+docker-build-static:
+	@mkdir -p $(BIN_DIR)
+	docker build -f docker/Dockerfile.static -t kepler-worker-static:$(VERSION) --build-arg VERSION=$(VERSION) .
+	docker run --rm -v $(PWD)/$(BIN_DIR):/output kepler-worker-static:$(VERSION) cp /kepler-worker-static /output/kepler-worker-static
+

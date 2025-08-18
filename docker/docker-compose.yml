@@ -16,8 +16,6 @@ services:
       - "8080:8080"    # Logdy web interface (if enabled)
     volumes:
       - kepler-videos:/app/kepler-videos
-      - kepler-logs:/app/logs
-      - ./kepler.env:/app/.env:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

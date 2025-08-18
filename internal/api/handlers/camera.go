@@ -117,147 +117,6 @@ func (h *CameraHandler) ListCameras(c *gin.Context) {
 	c.JSON(http.StatusOK, cameras)
 }
 
-// GetCameraStats godoc
-// @Summary Get camera statistics
-// @Description Get overall camera statistics including active and total count
-// @Tags cameras
-// @Accept json
-// @Produce json
-// @Success 200 {object} object{active_cameras=int,total_cameras=int,status=string}
-// @Router /cameras/stats [get]
-func (h *CameraHandler) GetCameraStats(c *gin.Context) {
-	active, total := h.cameraManager.GetStats()
-	c.JSON(http.StatusOK, gin.H{"active_cameras": active, "total_cameras": total, "status": "healthy"})
-}
-
-// UpdateCameraAI godoc
-// @Summary Update camera AI configuration
-// @Description Update AI processing settings for a specific camera
-// @Tags cameras
-// @Accept json
-// @Produce json
-// @Param camera_id path string true "Camera ID"
-// @Param ai_config body models.AIConfigRequest true "AI configuration"
-// @Success 200 {object} models.AIConfigResponse
-// @Failure 400 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
-// @Failure 500 {object} models.ErrorResponse
-// @Router /cameras/{camera_id}/ai [put]
-func (h *CameraHandler) UpdateCameraAI(c *gin.Context) {
-	cameraID := c.Param("camera_id")
-	if cameraID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "camera_id is required"})
-		return
-	}
-	var req models.AIConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		log.Error().Err(err).Str("camera_id", cameraID).Msg("invalid_ai_config_request")
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if err := h.cameraManager.UpdateAIConfig(cameraID, &req); err != nil {
-		if err.Error() == "camera not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found"})
-			return
-		}
-		log.Error().Err(err).Str("camera_id", cameraID).Msg("update_camera_ai_failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	aiConfig, err := h.cameraManager.GetAIConfig(cameraID)
-	if err != nil {
-		log.Error().Err(err).Str("camera_id", cameraID).Msg("get_ai_config_after_update_failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI config updated but failed to get details"})
-		return
-	}
-	log.Info().Str("camera_id", cameraID).Bool("ai_enabled", aiConfig.AIEnabled).Str("ai_endpoint", aiConfig.AIEndpoint).Strs("projects", aiConfig.Projects).Msg("camera_ai_config_updated")
-	c.JSON(http.StatusOK, aiConfig)
-}
-
-// GetCameraAI godoc
-// @Summary Get camera AI configuration
-// @Description Get AI processing settings for a specific camera
-// @Tags cameras
-// @Accept json
-// @Produce json
-// @Param camera_id path string true "Camera ID"
-// @Success 200 {object} models.AIConfigResponse
-// @Failure 400 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
-// @Failure 500 {object} models.ErrorResponse
-// @Router /cameras/{camera_id}/ai [get]
-func (h *CameraHandler) GetCameraAI(c *gin.Context) {
-	cameraID := c.Param("camera_id")
-	if cameraID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "camera_id is required"})
-		return
-	}
-	aiConfig, err := h.cameraManager.GetAIConfig(cameraID)
-	if err != nil {
-		if err.Error() == "camera not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found"})
-			return
-		}
-		log.Error().Err(err).Str("camera_id", cameraID).Msg("get_camera_ai_failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, aiConfig)
-}
-
-// ToggleCameraAI godoc
-// @Summary Toggle camera AI processing
-// @Description Enable or disable AI processing for a specific camera
-// @Tags cameras
-// @Accept json
-// @Produce json
-// @Param camera_id path string true "Camera ID"
-// @Success 200 {object} models.AIConfigResponse
-// @Failure 400 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
-// @Failure 500 {object} models.ErrorResponse
-// @Router /cameras/{camera_id}/ai/toggle [post]
-func (h *CameraHandler) ToggleCameraAI(c *gin.Context) {
-	cameraID := c.Param("camera_id")
-	if cameraID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "camera_id is required"})
-		return
-	}
-
-	// Get current config to toggle AI enabled
-	currentConfig, err := h.cameraManager.GetAIConfig(cameraID)
-	if err != nil {
-		if err.Error() == "camera not found" {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found"})
-			return
-		}
-		log.Error().Err(err).Str("camera_id", cameraID).Msg("get_current_ai_config_failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	// Toggle AI enabled flag
-	newEnabled := !currentConfig.AIEnabled
-	toggleReq := &models.AIConfigRequest{
-		AIEnabled: &newEnabled,
-	}
-
-	if err := h.cameraManager.UpdateAIConfig(cameraID, toggleReq); err != nil {
-		log.Error().Err(err).Str("camera_id", cameraID).Msg("toggle_camera_ai_failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	aiConfig, err := h.cameraManager.GetAIConfig(cameraID)
-	if err != nil {
-		log.Error().Err(err).Str("camera_id", cameraID).Msg("get_ai_config_after_toggle_failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "AI toggled but failed to get details"})
-		return
-	}
-	log.Info().Str("camera_id", cameraID).Bool("ai_enabled", aiConfig.AIEnabled).Msg("camera_ai_toggled")
-	c.JSON(http.StatusOK, aiConfig)
-}
-
 // UpdateCamera godoc
 // @Summary Update camera settings dynamically
 // @Description Update any camera settings dynamically without restart - supports URL changes, AI config, recording control, status management (start/stop/pause), and project updates
@@ -305,4 +164,48 @@ func (h *CameraHandler) UpdateCamera(c *gin.Context) {
 
 	log.Info().Str("camera_id", cameraID).Msg("camera_updated")
 	c.JSON(http.StatusOK, camera)
+}
+
+// DeleteCamera godoc
+// @Summary Delete a camera
+// @Description Permanently delete/remove a camera and stop its stream
+// @Tags cameras
+// @Accept json
+// @Produce json
+// @Param camera_id path string true "Camera ID"
+// @Success 200 {object} models.SuccessResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 404 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /cameras/{camera_id} [delete]
+func (h *CameraHandler) DeleteCamera(c *gin.Context) {
+	cameraID := c.Param("camera_id")
+	if cameraID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "camera_id is required"})
+		return
+	}
+	if err := h.cameraManager.StopCamera(cameraID); err != nil {
+		if err.Error() == fmt.Sprintf("camera %s not found", cameraID) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found"})
+			return
+		}
+		log.Error().Err(err).Str("camera_id", cameraID).Msg("delete_camera_failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	log.Info().Str("camera_id", cameraID).Msg("camera_deleted")
+	c.JSON(http.StatusOK, gin.H{"message": "Camera deleted successfully"})
+}
+
+// GetCameraStats godoc
+// @Summary Get camera statistics
+// @Description Get overall camera statistics including active and total count
+// @Tags cameras
+// @Accept json
+// @Produce json
+// @Success 200 {object} object{active_cameras=int,total_cameras=int,status=string}
+// @Router /cameras/stats [get]
+func (h *CameraHandler) GetCameraStats(c *gin.Context) {
+	active, total := h.cameraManager.GetStats()
+	c.JSON(http.StatusOK, gin.H{"active_cameras": active, "total_cameras": total, "status": "healthy"})
 }

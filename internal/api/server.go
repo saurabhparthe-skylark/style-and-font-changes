@@ -67,15 +67,13 @@ func (s *Server) setupRoutes() {
 	cameraHandler := handlers.NewCameraHandler(s.container.CameraManager)
 	cameraGroup := s.router.Group("cameras")
 	{
-		cameraGroup.POST("", cameraHandler.StartCamera)                         // Create/start camera
-		cameraGroup.POST("/:camera_id/stop", cameraHandler.StopCamera)          // Stop/delete camera
-		cameraGroup.GET("", cameraHandler.ListCameras)                          // List all cameras
-		cameraGroup.GET("/:camera_id", cameraHandler.GetCamera)                 // Get camera details
-		cameraGroup.PUT("/:camera_id", cameraHandler.UpdateCamera)              // Update any camera settings
-		cameraGroup.GET("/stats", cameraHandler.GetCameraStats)                 // Camera statistics
-		cameraGroup.GET("/:camera_id/ai", cameraHandler.GetCameraAI)            // Get AI config
-		cameraGroup.PUT("/:camera_id/ai", cameraHandler.UpdateCameraAI)         // Update AI config
-		cameraGroup.POST("/:camera_id/ai/toggle", cameraHandler.ToggleCameraAI) // Toggle AI (legacy)
+		cameraGroup.POST("", cameraHandler.StartCamera)                // Create/start camera
+		cameraGroup.POST("/:camera_id/stop", cameraHandler.StopCamera) // Stop/delete camera
+		cameraGroup.DELETE("/:camera_id", cameraHandler.DeleteCamera)  // Delete camera (REST-compliant)
+		cameraGroup.GET("", cameraHandler.ListCameras)                 // List all cameras
+		cameraGroup.GET("/:camera_id", cameraHandler.GetCamera)        // Get camera details
+		cameraGroup.PUT("/:camera_id", cameraHandler.UpdateCamera)     // Update any camera settings
+		cameraGroup.GET("/stats", cameraHandler.GetCameraStats)        // Camera statistics
 	}
 	s.router.GET("/mjpeg/:camera_id", func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")

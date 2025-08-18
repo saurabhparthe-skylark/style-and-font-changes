@@ -152,7 +152,7 @@ type AIConfigResponse struct {
 // CameraUpdateRequest for updating camera settings dynamically
 type CameraUpdateRequest struct {
 	URL          *string  `json:"url,omitempty"`           // Update RTSP URL
-	Projects     []string `json:"projects,omitempty"`      // Update projects
+	xProjects    []string `json:"projects,omitempty"`      // Update projects
 	AIEnabled    *bool    `json:"ai_enabled,omitempty"`    // Update AI settings
 	AIEndpoint   *string  `json:"ai_endpoint,omitempty"`   // Update AI endpoint
 	AITimeout    *string  `json:"ai_timeout,omitempty"`    // Update AI timeout
