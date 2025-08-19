@@ -13,24 +13,14 @@ import (
 // HandlePPEDetection handles PPE detection alerts
 func HandlePPEDetection(detection models.Detection, decision models.AlertDecision) models.AlertDecision {
 	// PPE alerts are only created for persons with violations and send_alert=true
-	if !detection.SendAlert {
-		log.Debug().
-			Int32("track_id", detection.TrackID).
-			Msg("PPE detection: send_alert=false, no alert created")
-		return decision
-	}
-
-	if strings.ToLower(detection.ClassName) != "person" {
-		log.Debug().
-			Str("class_name", detection.ClassName).
-			Msg("PPE detection: not a person, no alert created")
-		return decision
-	}
+	// if !detection.SendAlert {
+	// 	log.Info().
+	// 		Int32("track_id", detection.TrackID).
+	// 		Msg("PPE detection: send_alert=false, no alert created")
+	// 	return decision
+	// }
 
 	if len(detection.Violations) == 0 {
-		log.Debug().
-			Int32("track_id", detection.TrackID).
-			Msg("PPE detection: no violations, no alert created")
 		return decision
 	}
 
@@ -103,10 +93,10 @@ func BuildPPEAlert(detection models.Detection, cameraID string, frame []byte) mo
 	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "PPE alert")
 
 	// Add detection image using helper with PPE-specific metadata
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("ppe_alert_%d", detection.TrackID), map[string]interface{}{
-		"alert_type": decision.AlertType,
-		"violations": detection.Violations,
-	})
+	// helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("ppe_alert_%d", detection.TrackID), map[string]interface{}{
+	// 	"alert_type": decision.AlertType,
+	// 	"violations": detection.Violations,
+	// })
 
 	return payload
 }

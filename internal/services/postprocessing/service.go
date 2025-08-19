@@ -42,8 +42,8 @@ func NewService(cfg *config.Config, publisher models.MessagePublisher) (*Service
 		publisher:            publisher,
 		lastSent:             make(map[string]time.Time),
 		normalCooldown:       cfg.AlertsCooldown,
-		anomalyCooldown:      3 * time.Second, // Shorter cooldown for anomalies
-		selfLearningCooldown: 5 * time.Second, // Medium cooldown for self-learning
+		anomalyCooldown:      cfg.AlertsCooldown,
+		selfLearningCooldown: cfg.AlertsCooldown,
 		suppressionCooldown:  cfg.SuppressionCooldown,
 	}
 

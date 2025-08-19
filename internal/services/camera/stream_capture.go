@@ -151,10 +151,30 @@ func (sc *StreamCapture) StartVideoCaptureProcess(camera *models.Camera) error {
 	}
 }
 
-// sendFrameToPipeline sends frame to pipeline with buffer management
+// sendFrameToPipeline sends frame to pipeline with buffer management and panic recovery
 func (sc *StreamCapture) sendFrameToPipeline(camera *models.Camera, rawFrame *models.RawFrame, frameID int64) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Debug().
+				Str("camera_id", camera.ID).
+				Int64("frame_id", frameID).
+				Interface("panic", r).
+				Msg("Recovered from panic during frame send - channel likely being replaced during restart")
+		}
+	}()
+
+	// Use a helper function to safely check if channel is available
+	rawFramesChan := camera.RawFrames
+	if rawFramesChan == nil {
+		log.Debug().
+			Str("camera_id", camera.ID).
+			Int64("frame_id", frameID).
+			Msg("Raw frames channel is nil - skipping frame")
+		return
+	}
+
 	select {
-	case camera.RawFrames <- rawFrame:
+	case rawFramesChan <- rawFrame:
 		log.Debug().
 			Str("camera_id", camera.ID).
 			Int64("frame_id", frameID).
@@ -164,10 +184,13 @@ func (sc *StreamCapture) sendFrameToPipeline(camera *models.Camera, rawFrame *mo
 		droppedRaw := 0
 		// Drain some frames to make space for the latest
 	DrainRawLoop:
-		for len(camera.RawFrames) > sc.cfg.FrameBufferSize/2 {
+		for {
 			select {
-			case <-camera.RawFrames:
+			case <-rawFramesChan:
 				droppedRaw++
+				if droppedRaw >= sc.cfg.FrameBufferSize/2 {
+					break DrainRawLoop
+				}
 			default:
 				break DrainRawLoop
 			}
@@ -175,7 +198,7 @@ func (sc *StreamCapture) sendFrameToPipeline(camera *models.Camera, rawFrame *mo
 
 		// Now try to send the current frame
 		select {
-		case camera.RawFrames <- rawFrame:
+		case rawFramesChan <- rawFrame:
 			if droppedRaw > 0 {
 				log.Debug().
 					Str("camera_id", camera.ID).

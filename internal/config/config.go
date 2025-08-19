@@ -59,11 +59,10 @@ type Config struct {
 	PublishingBuffer int // Frames ready for MediaMTX
 
 	// AI Processing
-	AIEnabled         bool
-	AITimeout         time.Duration
-	AIRetries         int
-	ProcessingWorkers int
-	AIFrameInterval   int // Process every Nth frame for AI (1 = every frame, 2 = every 2nd frame, etc.)
+	AIEnabled       bool
+	AITimeout       time.Duration
+	AIRetries       int
+	AIFrameInterval int // Process every Nth frame for AI (1 = every frame, 2 = every 2nd frame, etc.)
 
 	// Alerting via NATS
 	AlertsSubject  string
@@ -181,16 +180,15 @@ func Load() *Config {
 		PublishingBuffer: getEnvInt("PUBLISHING_BUFFER_SIZE", 20),
 
 		// AI Processing
-		AIEnabled:         getEnvBool("AI_ENABLED", false),
-		AITimeout:         getEnvDuration("AI_TIMEOUT", 5*time.Second),
-		AIRetries:         getEnvInt("AI_RETRIES", 3),
-		ProcessingWorkers: getEnvInt("PROCESSING_WORKERS", 4),
-		AIFrameInterval:   getEnvInt("AI_FRAME_INTERVAL", 1),
+		AIEnabled:       getEnvBool("AI_ENABLED", false),
+		AITimeout:       getEnvDuration("AI_TIMEOUT", 5*time.Second),
+		AIRetries:       getEnvInt("AI_RETRIES", 3),
+		AIFrameInterval: getEnvInt("AI_FRAME_INTERVAL", 1),
 
 		// Alerting via NATS
 		AlertsSubject:  getEnv("ALERTS_SUBJECT", "alerts"),
 		AlertsWorkers:  getEnvInt("ALERTS_WORKERS", 2),
-		AlertsCooldown: getEnvDuration("ALERTS_COOLDOWN", 15*time.Second),
+		AlertsCooldown: getEnvDuration("ALERTS_COOLDOWN", 2*time.Second),
 
 		// Suppressions via NATS
 		SuppressionSubject:  getEnv("SUPPRESSION_SUBJECT", "suppressions"),
@@ -199,8 +197,8 @@ func Load() *Config {
 
 		// Image Compression for Alerts (disabled for performance)
 		ImageCompressionEnabled: getEnvBool("IMAGE_COMPRESSION_ENABLED", false),
-		MaxImageWidth:           getEnvInt("MAX_IMAGE_WIDTH", 1920),
-		MaxImageHeight:          getEnvInt("MAX_IMAGE_HEIGHT", 1080),
+		MaxImageWidth:           getEnvInt("MAX_IMAGE_WIDTH", 1280),
+		MaxImageHeight:          getEnvInt("MAX_IMAGE_HEIGHT", 720),
 		ImageQuality:            getEnvInt("IMAGE_QUALITY", 95),
 		MaxContextImageSize:     getEnvInt("MAX_CONTEXT_IMAGE_SIZE", 10*1024*1024),  // 10MB
 		MaxDetectionImageSize:   getEnvInt("MAX_DETECTION_IMAGE_SIZE", 5*1024*1024), // 5MB
@@ -212,8 +210,8 @@ func Load() *Config {
 		VideoMaxChunks: getEnvInt("VIDEO_MAX_CHUNKS", 50), // Keep 50 chunks per camera (~50 minutes)
 
 		// Stream Output
-		OutputWidth:   getEnvInt("OUTPUT_WIDTH", 1920),
-		OutputHeight:  getEnvInt("OUTPUT_HEIGHT", 1080),
+		OutputWidth:   getEnvInt("OUTPUT_WIDTH", 1280),
+		OutputHeight:  getEnvInt("OUTPUT_HEIGHT", 720),
 		OutputQuality: getEnvInt("OUTPUT_QUALITY", 75),
 		OutputBitrate: getEnvInt("OUTPUT_BITRATE", 2000),
 

@@ -27,8 +27,7 @@ func main() {
 		Str("version", cfg.Version).
 		Str("environment", cfg.Environment).
 		Int("port", cfg.Port).
-		Bool("ai_enabled", cfg.AIEnabled).
-		Msg("Starting Kepler Worker with enterprise pipeline")
+		Msg("Starting Kepler Worker")
 
 	server, err := setupHTTPServer(cfg)
 	if err != nil {

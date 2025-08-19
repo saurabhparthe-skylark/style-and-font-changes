@@ -45,9 +45,39 @@ func NewFrameProcessorWithCamera(cfg *config.Config, camera *models.Camera) (*Fr
 
 	// Initialize gRPC connection if AI is enabled
 	if camera != nil && camera.AIEnabled && camera.AIEndpoint != "" {
+		log.Info().
+			Str("camera_id", camera.ID).
+			Str("ai_endpoint", camera.AIEndpoint).
+			Bool("ai_enabled", camera.AIEnabled).
+			Msg("Initializing frame processor with AI enabled")
+
 		if err := fp.initGRPCConnection(camera.AIEndpoint); err != nil {
-			log.Warn().Err(err).Str("ai_endpoint", camera.AIEndpoint).Msg("Failed to initialize AI gRPC connection")
+			log.Error().Err(err).
+				Str("camera_id", camera.ID).
+				Str("ai_endpoint", camera.AIEndpoint).
+				Msg("Failed to initialize AI gRPC connection - AI will be disabled for this camera")
+		} else {
+			log.Info().
+				Str("camera_id", camera.ID).
+				Str("ai_endpoint", camera.AIEndpoint).
+				Msg("AI gRPC connection successfully established")
 		}
+	} else {
+		log.Info().
+			Str("camera_id", func() string {
+				if camera != nil {
+					return camera.ID
+				}
+				return "unknown"
+			}()).
+			Bool("ai_enabled", camera != nil && camera.AIEnabled).
+			Str("ai_endpoint", func() string {
+				if camera != nil {
+					return camera.AIEndpoint
+				}
+				return ""
+			}()).
+			Msg("Frame processor created without AI (AI disabled or no endpoint)")
 	}
 
 	return fp, nil
@@ -160,6 +190,16 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 
 	// Check if this frame should be processed by AI (Nth frame logic)
 	shouldProcessAI := aiEnabled && len(projects) > 0 && fp.grpcClient != nil
+
+	// Debug logging for AI processing decision
+	log.Debug().
+		Str("camera_id", rawFrame.CameraID).
+		Bool("ai_enabled", aiEnabled).
+		Int("projects_count", len(projects)).
+		Bool("grpc_client_available", fp.grpcClient != nil).
+		Bool("initial_should_process", shouldProcessAI).
+		Msg("AI processing decision check")
+
 	if shouldProcessAI {
 		if fp.camera != nil {
 			// Only process every Nth frame for AI when per-camera tracking is available
@@ -182,6 +222,13 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 				Bool("will_process_ai", shouldProcessAI).
 				Msg("ai_frame_interval_check")
 		}
+	} else {
+		log.Debug().
+			Str("camera_id", rawFrame.CameraID).
+			Bool("ai_enabled", aiEnabled).
+			Int("projects_count", len(projects)).
+			Bool("grpc_client_available", fp.grpcClient != nil).
+			Msg("AI processing skipped - conditions not met")
 	}
 
 	// Process with AI if conditions are met
@@ -467,7 +514,7 @@ func (fp *FrameProcessor) formatDetectionLabel(det models.Detection) string {
 	}
 
 	if len(det.Violations) > 0 {
-		label += fmt.Sprintf(" VIOLATION")
+		label += " VIOLATION"
 	}
 
 	return label

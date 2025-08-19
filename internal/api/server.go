@@ -67,13 +67,13 @@ func (s *Server) setupRoutes() {
 	cameraHandler := handlers.NewCameraHandler(s.container.CameraManager)
 	cameraGroup := s.router.Group("cameras")
 	{
-		cameraGroup.POST("", cameraHandler.StartCamera)                // Create/start camera
-		cameraGroup.POST("/:camera_id/stop", cameraHandler.StopCamera) // Stop/delete camera
-		cameraGroup.DELETE("/:camera_id", cameraHandler.DeleteCamera)  // Delete camera (REST-compliant)
-		cameraGroup.GET("", cameraHandler.ListCameras)                 // List all cameras
-		cameraGroup.GET("/:camera_id", cameraHandler.GetCamera)        // Get camera details
-		cameraGroup.PUT("/:camera_id", cameraHandler.UpdateCamera)     // Update any camera settings
-		cameraGroup.GET("/stats", cameraHandler.GetCameraStats)        // Camera statistics
+		cameraGroup.GET("/stats", cameraHandler.GetCameraStats)              // Camera statistics
+		cameraGroup.GET("", cameraHandler.ListCameras)                       // List all cameras
+		cameraGroup.GET("/:camera_id", cameraHandler.GetCamera)              // Get camera details
+		cameraGroup.POST("", cameraHandler.StartCamera)                      // Create/start camera
+		cameraGroup.PUT("/:camera_id", cameraHandler.UpsertCamera)           // Upsert camera settings
+		cameraGroup.POST("/:camera_id/restart", cameraHandler.RestartCamera) // Hard restart camera
+		cameraGroup.DELETE("/:camera_id", cameraHandler.DeleteCamera)        // Delete camera (REST-compliant)
 	}
 	s.router.GET("/mjpeg/:camera_id", func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
@@ -118,13 +118,10 @@ func (s *Server) setupRoutes() {
 
 func (s *Server) Start() error {
 	log.Info().
-		Str("worker_id", s.cfg.WorkerID).
 		Int("port", s.cfg.Port).
-		Bool("ai_enabled", s.cfg.AIEnabled).
-		Str("swagger_host", s.cfg.SwaggerHost).
-		Int("swagger_port", s.cfg.SwaggerPort).
-		Int("ai_frame_interval", s.cfg.AIFrameInterval).
-		Msg("Starting Kepler Worker server with enterprise pipeline")
+		Str("swagger_url", fmt.Sprintf("http://%s:%d/swagger/index.html", s.cfg.SwaggerHost, s.cfg.SwaggerPort)).
+		Str("worker_id", s.cfg.WorkerID).
+		Msg("Starting Kepler Worker Server")
 	return s.server.ListenAndServe()
 }
 

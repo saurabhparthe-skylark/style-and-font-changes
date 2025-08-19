@@ -107,16 +107,6 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	}
 
 	aiTimeout := cm.cfg.AITimeout
-	if req.AITimeout != nil && *req.AITimeout != "" {
-		if parsed, err := time.ParseDuration(*req.AITimeout); err == nil {
-			aiTimeout = parsed
-		} else {
-			log.Warn().
-				Str("camera_id", req.CameraID).
-				Str("invalid_timeout", *req.AITimeout).
-				Msg("Invalid AI timeout format, using default")
-		}
-	}
 
 	// Configure recording settings
 	enableRecord := true // Default to enabled
@@ -124,11 +114,8 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		enableRecord = *req.EnableRecord
 	}
 
-	// Configure status
-	status := "start" // Default to start
-	if req.Status != nil && *req.Status != "" {
-		status = *req.Status
-	}
+	// Configure status - always start when creating a new camera
+	status := models.CameraStatusStart
 
 	// Create camera with pipeline channels
 	camera := &models.Camera{
@@ -142,7 +129,7 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		Status:       status,
 		EnableRecord: enableRecord,
 		IsRecording:  false, // Will be set when recording actually starts
-		IsPaused:     status == "paused",
+		IsPaused:     status == models.CameraStatusPaused,
 
 		// AI Configuration
 		AIEnabled:  aiEnabled,
@@ -170,7 +157,7 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	cm.cameras[req.CameraID] = camera
 
 	// Start recording for this camera only if enabled and not paused
-	if cm.recorder != nil && enableRecord && status != "paused" {
+	if cm.recorder != nil && enableRecord && status != models.CameraStatusPaused {
 		if err := cm.recorder.StartRecording(req.CameraID); err != nil {
 			log.Error().Err(err).Str("camera_id", req.CameraID).Msg("Failed to start recording")
 		} else {
@@ -331,91 +318,25 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 				Int("skipped_frames", skippedFrames).
 				Msg("Frame processed with real-time optimization")
 
-			// Send to publisher (also implement latest-frame logic here)
+			// Send to publisher
 			select {
 			case camera.ProcessedFrames <- processedFrame:
 			default:
-				// If publisher buffer is full, drain it and put the latest frame
-				drainedPublisher := 0
-			DrainPublisher:
-				for {
-					select {
-					case <-camera.ProcessedFrames:
-						drainedPublisher++
-					default:
-						break DrainPublisher
-					}
-				}
-				// Now try to send the latest frame
-				select {
-				case camera.ProcessedFrames <- processedFrame:
-					if drainedPublisher > 0 {
-						log.Debug().
-							Str("camera_id", camera.ID).
-							Int("drained_publisher_frames", drainedPublisher).
-							Msg("Drained publisher buffer for real-time streaming")
-					}
-				default:
-					log.Warn().Str("camera_id", camera.ID).Msg("Still could not send to publisher after draining")
-				}
+				// Drop frame if buffer is full for real-time streaming
 			}
 
 			// Send to alerts
 			select {
 			case camera.AlertFrames <- processedFrame:
 			default:
-				// If alert buffer is full, drain it and put the latest frame
-				drainedAlert := 0
-			DrainAlert:
-				for {
-					select {
-					case <-camera.AlertFrames:
-						drainedAlert++
-					default:
-						break DrainAlert
-					}
-				}
-				// Now try to send the latest frame
-				select {
-				case camera.AlertFrames <- processedFrame:
-					if drainedAlert > 0 {
-						log.Debug().
-							Str("camera_id", camera.ID).
-							Int("drained_alert_frames", drainedAlert).
-							Msg("Drained alert buffer for real-time streaming")
-					}
-				default:
-					log.Warn().Str("camera_id", camera.ID).Msg("Still could not send to alerts after draining")
-				}
+				// Drop frame if buffer is full
 			}
 
 			// Send to recorder
 			select {
 			case camera.RecorderFrames <- processedFrame:
 			default:
-				// If recorder buffer is full, drain it and put the latest frame
-				drainedRecorder := 0
-			DrainRecorder:
-				for {
-					select {
-					case <-camera.RecorderFrames:
-						drainedRecorder++
-					default:
-						break DrainRecorder
-					}
-				}
-				// Now try to send the latest frame
-				select {
-				case camera.RecorderFrames <- processedFrame:
-					if drainedRecorder > 0 {
-						log.Debug().
-							Str("camera_id", camera.ID).
-							Int("drained_recorder_frames", drainedRecorder).
-							Msg("Drained recorder buffer for real-time streaming")
-					}
-				default:
-					log.Warn().Str("camera_id", camera.ID).Msg("Still could not send to recorder after draining")
-				}
+				// Drop frame if buffer is full
 			}
 		}
 	}
@@ -539,7 +460,7 @@ func (cm *CameraManager) runRecorderProcessor(camera *models.Camera) {
 			return
 		case processedFrame := <-camera.RecorderFrames:
 			// Only process frames if recording is enabled and camera is in recording state
-			if !camera.EnableRecord || camera.Status == "paused" || camera.Status == "stop" || !camera.IsRecording {
+			if !camera.EnableRecord || camera.Status == models.CameraStatusPaused || camera.Status == models.CameraStatusStop || !camera.IsRecording {
 				// Skip frame processing when recording is disabled or camera is paused/stopped
 				continue
 			}
@@ -774,8 +695,8 @@ func (cm *CameraManager) checkCameraHealth() {
 	}
 }
 
-// UpdateCameraSettings updates camera settings dynamically without restart
-func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.CameraUpdateRequest) error {
+// UpdateCameraSettings updates camera settings dynamically and restarts components as needed
+func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.CameraUpsertRequest) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
@@ -784,17 +705,22 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
+	var needsStreamRestart bool
+	var needsFrameProcessorRestart bool
+	var needsCameraStop bool = false
+	var needsCameraStart bool = false
+
 	// Update URL if provided (requires restart of stream reader)
 	if req.URL != nil && *req.URL != camera.URL {
 		oldURL := camera.URL
 		camera.URL = *req.URL
+		needsStreamRestart = true
 
-		// Need to restart stream reader with new URL
 		log.Info().
 			Str("camera_id", cameraID).
 			Str("old_url", oldURL).
 			Str("new_url", *req.URL).
-			Msg("Camera URL updated, stream will reconnect")
+			Msg("Camera URL updated, will restart stream reader")
 	}
 
 	// Update projects
@@ -803,18 +729,42 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	}
 
 	// Update AI configuration
-	if req.AIEnabled != nil {
+	aiChanged := false
+	oldAIEnabled := camera.AIEnabled
+	oldAIEndpoint := camera.AIEndpoint
+	oldAITimeout := camera.AITimeout
+
+	if req.AIEnabled != nil && *req.AIEnabled != camera.AIEnabled {
 		camera.AIEnabled = *req.AIEnabled
+		aiChanged = true
+		log.Info().
+			Str("camera_id", cameraID).
+			Bool("old_ai_enabled", oldAIEnabled).
+			Bool("new_ai_enabled", camera.AIEnabled).
+			Msg("AI enabled state changed")
 	}
 
-	if req.AIEndpoint != nil {
+	if req.AIEndpoint != nil && *req.AIEndpoint != camera.AIEndpoint {
 		camera.AIEndpoint = *req.AIEndpoint
+		aiChanged = true
+		log.Info().
+			Str("camera_id", cameraID).
+			Str("old_ai_endpoint", oldAIEndpoint).
+			Str("new_ai_endpoint", camera.AIEndpoint).
+			Msg("AI endpoint changed")
 	}
 
-	if req.AITimeout != nil {
-		if parsed, err := time.ParseDuration(*req.AITimeout); err == nil {
-			camera.AITimeout = parsed
-		}
+	if aiChanged {
+		needsFrameProcessorRestart = true
+		log.Info().
+			Str("camera_id", cameraID).
+			Bool("old_ai_enabled", oldAIEnabled).
+			Bool("new_ai_enabled", camera.AIEnabled).
+			Str("old_ai_endpoint", oldAIEndpoint).
+			Str("new_ai_endpoint", camera.AIEndpoint).
+			Dur("old_ai_timeout", oldAITimeout).
+			Dur("new_ai_timeout", camera.AITimeout).
+			Msg("AI configuration updated, will restart frame processor")
 	}
 
 	// Update recording settings
@@ -848,13 +798,33 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	if req.Status != nil {
 		oldStatus := camera.Status
 		camera.Status = *req.Status
-		camera.IsPaused = *req.Status == "paused"
+		camera.IsPaused = camera.Status == models.CameraStatusPaused
+
+		// Check if camera needs to be completely stopped
+		if camera.Status == models.CameraStatusStop {
+			needsCameraStop = true
+			log.Info().
+				Str("camera_id", cameraID).
+				Str("old_status", oldStatus.String()).
+				Str("new_status", camera.Status.String()).
+				Msg("Camera status changed to stop - will completely stop camera")
+		}
+
+		// Check if camera needs to be started (was stopped and now starting)
+		if oldStatus == models.CameraStatusStop && camera.Status == models.CameraStatusStart && !camera.IsActive {
+			needsCameraStart = true
+			log.Info().
+				Str("camera_id", cameraID).
+				Str("old_status", oldStatus.String()).
+				Str("new_status", camera.Status.String()).
+				Msg("Camera status changed from stop to start - will restart camera")
+		}
 
 		// Handle status change effects on recording
 		if camera.EnableRecord && cm.recorder != nil {
-			switch *req.Status {
-			case "start":
-				if oldStatus == "paused" && !camera.IsRecording {
+			switch camera.Status {
+			case models.CameraStatusStart:
+				if oldStatus == models.CameraStatusPaused && !camera.IsRecording {
 					// Resume from pause
 					if err := cm.recorder.StartRecording(cameraID); err != nil {
 						log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to resume recording")
@@ -862,7 +832,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 						camera.IsRecording = true
 					}
 				}
-			case "paused":
+			case models.CameraStatusPaused:
 				if camera.IsRecording {
 					// Pause recording
 					if err := cm.recorder.StopRecording(cameraID); err != nil {
@@ -871,7 +841,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 						camera.IsRecording = false
 					}
 				}
-			case "stop":
+			case models.CameraStatusStop:
 				if camera.IsRecording {
 					// Stop recording
 					if err := cm.recorder.StopRecording(cameraID); err != nil {
@@ -884,13 +854,181 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 		}
 	}
 
+	// Handle camera stop signal - completely stop the camera
+	if needsCameraStop {
+		log.Info().
+			Str("camera_id", cameraID).
+			Msg("Stopping camera completely due to status change")
+
+		// Stop camera internal processes
+		cm.stopCameraInternal(camera)
+
+		// Don't delete from cameras map as we want to keep the configuration
+		// Just mark as inactive
+		camera.IsActive = false
+
+		log.Info().
+			Str("camera_id", cameraID).
+			Str("status", camera.Status.String()).
+			Bool("is_active", camera.IsActive).
+			Msg("Camera stopped successfully due to status change")
+
+		return nil
+	}
+
+	// Handle camera start signal - restart stopped camera
+	if needsCameraStart {
+		log.Info().
+			Str("camera_id", cameraID).
+			Msg("Starting camera due to status change from stop to start")
+
+		// Reset camera state
+		camera.IsActive = true
+		camera.FrameCount = 0
+		camera.ErrorCount = 0
+		camera.LastFrameTime = time.Time{}
+		camera.RecentFrameTimes = make([]time.Time, 0, 30)
+		camera.AIFrameCounter = 0
+		camera.AIDetectionCount = 0
+		camera.LastAIError = ""
+
+		// Create new channels
+		camera.RawFrames = make(chan *models.RawFrame, cm.cfg.FrameBufferSize)
+		camera.ProcessedFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
+		camera.AlertFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
+		camera.RecorderFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
+		camera.StopChannel = make(chan struct{})
+
+		// Start recording if enabled
+		if cm.recorder != nil && camera.EnableRecord {
+			if err := cm.recorder.StartRecording(cameraID); err != nil {
+				log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to start recording after camera start")
+			} else {
+				camera.IsRecording = true
+			}
+		}
+
+		// Start all pipeline components
+		go cm.runStreamReader(camera)
+		go cm.runFrameProcessor(camera)
+		go cm.runPublisher(camera)
+		go cm.runPostProcessor(camera)
+		go cm.runRecorderProcessor(camera)
+
+		log.Info().
+			Str("camera_id", cameraID).
+			Str("status", camera.Status.String()).
+			Bool("is_active", camera.IsActive).
+			Bool("is_recording", camera.IsRecording).
+			Msg("Camera started successfully due to status change")
+
+		return nil
+	}
+
+	// Apply component restarts if needed
+	if needsStreamRestart || needsFrameProcessorRestart {
+		log.Info().
+			Str("camera_id", cameraID).
+			Bool("restart_stream", needsStreamRestart).
+			Bool("restart_frame_processor", needsFrameProcessorRestart).
+			Msg("Restarting camera components due to configuration changes")
+
+		// Use internal restart without resetting statistics
+		if err := cm.restartCameraInternal(camera, false); err != nil {
+			log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to restart camera components")
+			return fmt.Errorf("failed to restart camera components: %w", err)
+		}
+	}
+
 	log.Info().
 		Str("camera_id", cameraID).
-		Str("status", camera.Status).
+		Str("status", camera.Status.String()).
 		Bool("enable_record", camera.EnableRecord).
 		Bool("is_recording", camera.IsRecording).
 		Bool("is_paused", camera.IsPaused).
+		Bool("components_restarted", needsStreamRestart || needsFrameProcessorRestart).
 		Msg("Camera settings updated dynamically")
 
 	return nil
+}
+
+// restartCameraInternal performs camera restart with optional statistics reset
+func (cm *CameraManager) restartCameraInternal(camera *models.Camera, resetStats bool) error {
+	log.Info().
+		Str("camera_id", camera.ID).
+		Bool("reset_stats", resetStats).
+		Bool("ai_enabled", camera.AIEnabled).
+		Str("ai_endpoint", camera.AIEndpoint).
+		Msg("Starting camera restart")
+
+	// Stop the camera components
+	cm.stopCameraInternal(camera)
+
+	// Wait a moment for graceful shutdown
+	time.Sleep(200 * time.Millisecond)
+
+	// Create new channels
+	camera.RawFrames = make(chan *models.RawFrame, cm.cfg.FrameBufferSize)
+	camera.ProcessedFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
+	camera.AlertFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
+	camera.RecorderFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
+	camera.StopChannel = make(chan struct{})
+
+	// Reset camera state if requested (for hard restart)
+	if resetStats {
+		camera.FrameCount = 0
+		camera.ErrorCount = 0
+		camera.LastFrameTime = time.Time{}
+		camera.RecentFrameTimes = make([]time.Time, 0, 30)
+		camera.AIFrameCounter = 0
+		camera.AIDetectionCount = 0
+		camera.LastAIError = ""
+		log.Debug().Str("camera_id", camera.ID).Msg("Camera statistics reset")
+	}
+
+	// Set camera as active
+	camera.IsActive = true
+
+	// Restart recording if enabled and not paused
+	if cm.recorder != nil && camera.EnableRecord && camera.Status != models.CameraStatusPaused {
+		if err := cm.recorder.StartRecording(camera.ID); err != nil {
+			log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to start recording after restart")
+		} else {
+			camera.IsRecording = true
+		}
+	} else {
+		camera.IsRecording = false
+	}
+
+	// Restart all pipeline components
+	go cm.runStreamReader(camera)
+	go cm.runFrameProcessor(camera)
+	go cm.runPublisher(camera)
+	go cm.runPostProcessor(camera)
+	go cm.runRecorderProcessor(camera)
+
+	log.Info().
+		Str("camera_id", camera.ID).
+		Bool("reset_stats", resetStats).
+		Bool("ai_enabled", camera.AIEnabled).
+		Bool("recording_enabled", camera.IsRecording).
+		Msg("Camera restart completed successfully")
+
+	return nil
+}
+
+// RestartCamera performs a hard restart of the entire camera pipeline
+func (cm *CameraManager) RestartCamera(cameraID string) error {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+
+	camera, exists := cm.cameras[cameraID]
+	if !exists {
+		return fmt.Errorf("camera %s not found", cameraID)
+	}
+
+	log.Info().Str("camera_id", cameraID).Msg("Performing hard restart of camera")
+
+	// Use internal restart with statistics reset
+	return cm.restartCameraInternal(camera, true)
 }
