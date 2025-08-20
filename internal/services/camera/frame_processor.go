@@ -168,7 +168,7 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 	// Create ProcessedFrame with current metadata
 	processedFrame := &models.ProcessedFrame{
 		CameraID:  rawFrame.CameraID,
-		Data:      rawFrame.Data, // Will be modified by addEnhancedStatsFrame
+		Data:      rawFrame.Data, // Will be modified by addEnhancedStatsFrame (BGR format)
 		Timestamp: rawFrame.Timestamp,
 		FrameID:   rawFrame.FrameID,
 		Width:     rawFrame.Width,
@@ -428,6 +428,9 @@ func (fp *FrameProcessor) addEnhancedStatsFrame(processedFrame *models.Processed
 	}
 
 	fp.drawStatsOverlay(&mat, processedFrame, aiResult)
+
+	// Keep original behavior - output raw BGR bytes
+	// image_utils.go will handle the BGR->JPEG conversion safely
 	processedFrame.Data = mat.ToBytes()
 }
 

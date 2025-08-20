@@ -503,14 +503,12 @@ func (cm *CameraManager) stopCameraInternal(camera *models.Camera) {
 
 	camera.IsActive = false
 
-	// Stop all processes
-	close(camera.StopChannel)
-
-	// Close channels
-	close(camera.RawFrames)
-	close(camera.ProcessedFrames)
-	close(camera.AlertFrames)
-	close(camera.RecorderFrames)
+	// Safely close all channels
+	cm.safeCloseStopChannel(camera.StopChannel, camera.ID)
+	cm.safeCloseRawFrames(camera.RawFrames, camera.ID)
+	cm.safeCloseProcessedFrames(camera.ProcessedFrames, camera.ID)
+	cm.safeCloseAlertFrames(camera.AlertFrames, camera.ID)
+	cm.safeCloseRecorderFrames(camera.RecorderFrames, camera.ID)
 }
 
 // GetCamera returns camera information
@@ -1031,4 +1029,51 @@ func (cm *CameraManager) RestartCamera(cameraID string) error {
 
 	// Use internal restart with statistics reset
 	return cm.restartCameraInternal(camera, true)
+}
+
+// Safe channel closing helper functions to prevent "close of closed channel" panics
+
+func (cm *CameraManager) safeCloseStopChannel(ch chan struct{}, cameraID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Debug().Str("camera_id", cameraID).Msg("StopChannel already closed")
+		}
+	}()
+	close(ch)
+}
+
+func (cm *CameraManager) safeCloseRawFrames(ch chan *models.RawFrame, cameraID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Debug().Str("camera_id", cameraID).Msg("RawFrames channel already closed")
+		}
+	}()
+	close(ch)
+}
+
+func (cm *CameraManager) safeCloseProcessedFrames(ch chan *models.ProcessedFrame, cameraID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Debug().Str("camera_id", cameraID).Msg("ProcessedFrames channel already closed")
+		}
+	}()
+	close(ch)
+}
+
+func (cm *CameraManager) safeCloseAlertFrames(ch chan *models.ProcessedFrame, cameraID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Debug().Str("camera_id", cameraID).Msg("AlertFrames channel already closed")
+		}
+	}()
+	close(ch)
+}
+
+func (cm *CameraManager) safeCloseRecorderFrames(ch chan *models.ProcessedFrame, cameraID string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Debug().Str("camera_id", cameraID).Msg("RecorderFrames channel already closed")
+		}
+	}()
+	close(ch)
 }

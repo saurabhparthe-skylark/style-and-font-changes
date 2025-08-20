@@ -194,11 +194,15 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 
 	// Handle anomaly detections using proper handler
 	if strings.Contains(strings.ToUpper(detection.Label), "ANOMALY") {
+		log.Debug().
+			Msg("Anomaly detection detected")
 		return alerts.HandleAnomalyDetection(detection, decision)
 	}
 
 	// Handle self-learning detections using proper handler
 	if detection.IsRPN && !strings.Contains(strings.ToLower(detection.Label), "rtdetr") {
+		log.Debug().
+			Msg("Self-learning detection detected")
 		return alerts.HandleSelfLearningDetection(detection, decision)
 	}
 

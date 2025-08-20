@@ -12,6 +12,7 @@ import (
 	"kepler-worker-go/internal/models"
 
 	"github.com/rs/zerolog/log"
+	"gocv.io/x/gocv"
 )
 
 const (
@@ -29,6 +30,68 @@ const (
 	MaxDetectionImageSize = 200 * 1024  // 200KB for detection images
 	MaxTotalPayloadSize   = 1024 * 1024 // 1MB total payload limit
 )
+
+// Helper functions
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// isJPEGData checks if the byte slice contains JPEG data by checking magic bytes
+func isJPEGData(data []byte) bool {
+	if len(data) < 2 {
+		return false
+	}
+	// JPEG magic bytes: FF D8
+	return data[0] == 0xFF && data[1] == 0xD8
+}
+
+// convertBGRToJPEG safely converts BGR raw bytes to JPEG format
+func convertBGRToJPEG(bgrData []byte, width, height int, quality int) ([]byte, error) {
+	if len(bgrData) == 0 {
+		return nil, fmt.Errorf("empty BGR data")
+	}
+
+	// Create Mat from BGR bytes
+	mat, err := gocv.NewMatFromBytes(height, width, gocv.MatTypeCV8UC3, bgrData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Mat from BGR data: %w", err)
+	}
+	defer mat.Close()
+
+	// Encode as JPEG
+	jpegBuf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, mat, []int{gocv.IMWriteJpegQuality, quality})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode BGR as JPEG: %w", err)
+	}
+	defer jpegBuf.Close()
+
+	return jpegBuf.GetBytes(), nil
+}
+
+// convertFrameToJPEG intelligently converts frame data to JPEG format
+func convertFrameToJPEG(frameData []byte, width, height int, quality int) ([]byte, error) {
+	if len(frameData) == 0 {
+		return nil, fmt.Errorf("empty frame data")
+	}
+
+	// Check if data is already JPEG
+	if isJPEGData(frameData) {
+		return frameData, nil
+	}
+
+	// Assume BGR format and convert
+	return convertBGRToJPEG(frameData, width, height, quality)
+}
 
 // CompressAndResizeImage compresses and resizes an image to fit within size limits
 func CompressAndResizeImage(img image.Image, maxWidth, maxHeight int, targetSizeBytes int) ([]byte, error) {
@@ -92,7 +155,7 @@ func CompressAndResizeImage(img image.Image, maxWidth, maxHeight int, targetSize
 	return nil, fmt.Errorf("unable to compress image to target size")
 }
 
-// CreateCroppedImageB64 creates a base64 encoded cropped image from frame and bbox (optimized for performance)
+// CreateCroppedImageB64 creates a base64 encoded cropped image from frame data and bbox (supports both JPEG and BGR)
 func CreateCroppedImageB64(frame []byte, bbox []float32, cameraID, identifier string) (string, error) {
 	if len(bbox) != 4 {
 		return "", fmt.Errorf("invalid bbox length: %d", len(bbox))
@@ -110,36 +173,110 @@ func CreateCroppedImageB64(frame []byte, bbox []float32, cameraID, identifier st
 		Str("camera_id", cameraID).
 		Str("identifier", identifier).
 		Floats32("bbox", bbox).
-		Msg("📸 Creating cropped image from frame")
+		Msg("📸 Creating cropped image from frame data")
 
-	// Decode the image
+	// Try to decode as image first (works for JPEG data)
 	img, _, err := image.Decode(bytes.NewReader(frame))
 	if err != nil {
+		// If decoding fails, assume it's BGR data and convert to JPEG first
 		log.Debug().
-			Err(err).
 			Str("camera_id", cameraID).
-			Msg("Failed to decode image for cropping, skipping for performance")
-		return "", fmt.Errorf("failed to decode image: %w", err)
+			Msg("Frame data is not in image format, converting BGR to JPEG")
+
+		// Use standard frame dimensions for BGR conversion (1280x720 default)
+		jpegData, convertErr := convertBGRToJPEG(frame, 1280, 720, 95)
+		if convertErr != nil {
+			log.Warn().
+				Err(convertErr).
+				Str("camera_id", cameraID).
+				Msg("Failed to convert BGR to JPEG for cropping")
+			return "", fmt.Errorf("failed to convert BGR to JPEG: %w", convertErr)
+		}
+
+		// Now decode the converted JPEG
+		img, _, err = image.Decode(bytes.NewReader(jpegData))
+		if err != nil {
+			log.Debug().
+				Err(err).
+				Str("camera_id", cameraID).
+				Msg("Failed to decode converted JPEG for cropping")
+			return "", fmt.Errorf("failed to decode converted JPEG: %w", err)
+		}
 	}
 
 	bounds := img.Bounds()
 	imgWidth := float32(bounds.Max.X)
 	imgHeight := float32(bounds.Max.Y)
 
-	// Convert normalized coordinates to pixel coordinates
-	// bbox format: [x_min, y_min, x_max, y_max] (normalized 0-1)
-	x1 := int(bbox[0] * imgWidth)
-	y1 := int(bbox[1] * imgHeight)
-	x2 := int(bbox[2] * imgWidth)
-	y2 := int(bbox[3] * imgHeight)
+	log.Debug().
+		Str("camera_id", cameraID).
+		Str("identifier", identifier).
+		Floats32("raw_bbox", bbox).
+		Float32("img_width", imgWidth).
+		Float32("img_height", imgHeight).
+		Msg("📸 Processing bbox coordinates")
+
+	var x1, y1, x2, y2 int
+
+	// Detect if coordinates are normalized (0-1) or already in pixel coordinates
+	if bbox[0] <= 1.0 && bbox[1] <= 1.0 && bbox[2] <= 1.0 && bbox[3] <= 1.0 {
+		// Normalized coordinates (0-1) - convert to pixels
+		x1 = int(bbox[0] * imgWidth)
+		y1 = int(bbox[1] * imgHeight)
+		x2 = int(bbox[2] * imgWidth)
+		y2 = int(bbox[3] * imgHeight)
+
+		log.Debug().
+			Str("camera_id", cameraID).
+			Msg("📸 Using normalized coordinates (0-1)")
+	} else {
+		// Already pixel coordinates - use directly
+		x1 = int(bbox[0])
+		y1 = int(bbox[1])
+		x2 = int(bbox[2])
+		y2 = int(bbox[3])
+
+		log.Debug().
+			Str("camera_id", cameraID).
+			Msg("📸 Using pixel coordinates directly")
+	}
 
 	// Ensure coordinates are within image bounds
-	if x1 < 0 {
-		x1 = 0
+	x1 = max(0, min(int(imgWidth)-1, x1))
+	y1 = max(0, min(int(imgHeight)-1, y1))
+	x2 = max(0, min(int(imgWidth), x2))
+	y2 = max(0, min(int(imgHeight), y2))
+
+	// Ensure minimum crop size (at least 10x10 pixels for visibility)
+	minCropSize := 10
+	cropWidth := x2 - x1
+	cropHeight := y2 - y1
+
+	if cropWidth < minCropSize {
+		// Expand width around center
+		center := (x1 + x2) / 2
+		x1 = max(0, center-minCropSize/2)
+		x2 = min(int(imgWidth), x1+minCropSize)
+
+		// If still too small, adjust
+		if x2-x1 < minCropSize {
+			x2 = min(int(imgWidth), x1+minCropSize)
+		}
 	}
-	if y1 < 0 {
-		y1 = 0
+
+	if cropHeight < minCropSize {
+		// Expand height around center
+		center := (y1 + y2) / 2
+		y1 = max(0, center-minCropSize/2)
+		y2 = min(int(imgHeight), y1+minCropSize)
+
+		// If still too small, adjust
+		if y2-y1 < minCropSize {
+			y2 = min(int(imgHeight), y1+minCropSize)
+		}
 	}
+
+	// Final bounds check
 	if x2 > int(imgWidth) {
 		x2 = int(imgWidth)
 	}
@@ -147,13 +284,26 @@ func CreateCroppedImageB64(frame []byte, bbox []float32, cameraID, identifier st
 		y2 = int(imgHeight)
 	}
 
-	// Ensure valid crop rectangle
-	if x1 >= x2 || y1 >= y2 {
-		log.Debug().
+	log.Debug().
+		Str("camera_id", cameraID).
+		Str("identifier", identifier).
+		Ints("final_coords", []int{x1, y1, x2, y2}).
+		Int("crop_width", x2-x1).
+		Int("crop_height", y2-y1).
+		Msg("📸 Final crop coordinates")
+
+	// Validate crop rectangle
+	if x1 >= x2 || y1 >= y2 || x2-x1 < 1 || y2-y1 < 1 {
+		log.Warn().
 			Str("camera_id", cameraID).
-			Ints("crop_coords", []int{x1, y1, x2, y2}).
-			Msg("Invalid crop coordinates, skipping")
-		return "", fmt.Errorf("invalid crop coordinates")
+			Str("identifier", identifier).
+			Floats32("original_bbox", bbox).
+			Ints("calculated_coords", []int{x1, y1, x2, y2}).
+			Float32("img_width", imgWidth).
+			Float32("img_height", imgHeight).
+			Msg("📸 Invalid crop coordinates after processing")
+		return "", fmt.Errorf("invalid crop coordinates: [%d,%d,%d,%d] from bbox [%.3f,%.3f,%.3f,%.3f] on image %dx%d",
+			x1, y1, x2, y2, bbox[0], bbox[1], bbox[2], bbox[3], int(imgWidth), int(imgHeight))
 	}
 
 	// Create cropped image
@@ -178,7 +328,8 @@ func CreateCroppedImageB64(frame []byte, bbox []float32, cameraID, identifier st
 		return "", fmt.Errorf("failed to encode cropped image: %w", err)
 	}
 
-	croppedImageB64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+	// Create data URL format for proper client consumption
+	croppedImageB64 := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
 
 	log.Debug().
 		Str("camera_id", cameraID).
@@ -188,7 +339,7 @@ func CreateCroppedImageB64(frame []byte, bbox []float32, cameraID, identifier st
 		Int("base64_size", len(croppedImageB64)).
 		Int("crop_width", x2-x1).
 		Int("crop_height", y2-y1).
-		Msg("📸 Successfully created raw cropped image for performance")
+		Msg("📸 Successfully created cropped image from frame data")
 
 	return croppedImageB64, nil
 }
@@ -212,13 +363,23 @@ func GetDetectionTypeFromLabel(label string) models.DetectionType {
 
 // AddContextImageWithConfig adds a compressed base64 encoded context image to the payload using configuration
 func AddContextImageWithConfig(payload interface{}, frame []byte, cameraID string, trackID int32, messageType string, cfg *config.Config) {
-	if frame == nil || len(frame) == 0 {
+	if len(frame) == 0 {
 		return
 	}
 
 	if !cfg.ImageCompressionEnabled {
-		// Use original frame without compression
-		contextImageB64 := base64.StdEncoding.EncodeToString(frame)
+		// Convert frame to JPEG format if needed
+		jpegData, err := convertFrameToJPEG(frame, 1280, 720, 95)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("camera_id", cameraID).
+				Msg("Failed to convert frame to JPEG for context image, skipping")
+			return
+		}
+
+		// Create data URL format for proper client consumption
+		contextImageB64 := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegData)
 
 		switch p := payload.(type) {
 		case *models.AlertPayload:
@@ -231,7 +392,10 @@ func AddContextImageWithConfig(payload interface{}, frame []byte, cameraID strin
 			Str("camera_id", cameraID).
 			Int32("track_id", trackID).
 			Str("type", messageType).
-			Msg("📸 Added uncompressed context image")
+			Int("original_frame_size", len(frame)).
+			Int("jpeg_size", len(jpegData)).
+			Int("base64_size", len(contextImageB64)).
+			Msg("📸 Added context image with proper JPEG encoding")
 		return
 	}
 
@@ -255,7 +419,8 @@ func AddContextImageWithConfig(payload interface{}, frame []byte, cameraID strin
 		return
 	}
 
-	contextImageB64 := base64.StdEncoding.EncodeToString(compressed)
+	// Create data URL format for proper client consumption
+	contextImageB64 := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(compressed)
 
 	// Handle both AlertPayload and SuppressionPayload
 	switch p := payload.(type) {
@@ -275,14 +440,24 @@ func AddContextImageWithConfig(payload interface{}, frame []byte, cameraID strin
 		Msg("📸 Added compressed context image")
 }
 
-// AddContextImage keeps the original interface for backward compatibility (optimized for performance)
+// AddContextImage keeps the original interface for backward compatibility (handles both JPEG and BGR)
 func AddContextImage(payload interface{}, frame []byte, cameraID string, trackID int32, messageType string) {
-	if frame == nil || len(frame) == 0 {
+	if len(frame) == 0 {
 		return
 	}
 
-	// Send raw frame as base64 for maximum performance (no compression)
-	contextImageB64 := base64.StdEncoding.EncodeToString(frame)
+	// Convert frame to JPEG format if needed (handles both JPEG and BGR)
+	jpegData, err := convertFrameToJPEG(frame, 1280, 720, 95)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("camera_id", cameraID).
+			Msg("Failed to convert frame to JPEG for context image, skipping")
+		return
+	}
+
+	// Create data URL format for proper client consumption
+	contextImageB64 := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegData)
 
 	// Handle both AlertPayload and SuppressionPayload
 	switch p := payload.(type) {
@@ -295,10 +470,11 @@ func AddContextImage(payload interface{}, frame []byte, cameraID string, trackID
 	log.Debug().
 		Str("camera_id", cameraID).
 		Int32("track_id", trackID).
-		Int("raw_frame_size", len(frame)).
+		Int("original_frame_size", len(frame)).
+		Int("jpeg_size", len(jpegData)).
 		Int("context_image_b64_size", len(contextImageB64)).
 		Str("type", messageType).
-		Msg("📸 Added raw context image for performance")
+		Msg("📸 Added context image with proper JPEG encoding")
 }
 
 // CompressAndResizeImageWithConfig compresses and resizes an image using configuration
@@ -375,17 +551,59 @@ func CompressAndResizeImageWithConfig(img image.Image, maxWidth, maxHeight int, 
 
 // AddDetectionImage adds a cropped detection image to the payload
 func AddDetectionImage(payload interface{}, detection models.Detection, frame []byte, cameraID, identifier string, extraMetadata map[string]interface{}) {
-	if frame == nil || len(frame) == 0 || len(detection.BBox) != 4 {
+	if len(frame) == 0 {
+		return
+	}
+
+	// Validate detection bounding box
+	if len(detection.BBox) != 4 {
+		log.Warn().
+			Str("camera_id", cameraID).
+			Str("identifier", identifier).
+			Int("bbox_length", len(detection.BBox)).
+			Msg("📸 Invalid detection bbox length, skipping detection image")
+		return
+	}
+
+	// Validate bounding box values
+	bbox := detection.BBox
+	if bbox[0] < 0 || bbox[1] < 0 || bbox[2] < 0 || bbox[3] < 0 {
+		log.Warn().
+			Str("camera_id", cameraID).
+			Str("identifier", identifier).
+			Floats32("bbox", bbox).
+			Msg("📸 Negative bbox coordinates, skipping detection image")
+		return
+	}
+
+	// Check for zero-size bounding box
+	if (bbox[2] <= bbox[0]) || (bbox[3] <= bbox[1]) {
+		log.Warn().
+			Str("camera_id", cameraID).
+			Str("identifier", identifier).
+			Floats32("bbox", bbox).
+			Msg("📸 Zero or negative size bbox, skipping detection image")
 		return
 	}
 
 	croppedImageB64, err := CreateCroppedImageB64(frame, detection.BBox, cameraID, identifier)
 	if err != nil {
-		log.Warn().Err(err).Str("identifier", identifier).Msg("Failed to create cropped detection image")
+		log.Warn().
+			Err(err).
+			Str("camera_id", cameraID).
+			Str("identifier", identifier).
+			Floats32("bbox", detection.BBox).
+			Int32("track_id", detection.TrackID).
+			Str("class_name", detection.ClassName).
+			Msg("📸 Failed to create cropped detection image")
 		return
 	}
 
 	if croppedImageB64 == "" {
+		log.Debug().
+			Str("camera_id", cameraID).
+			Str("identifier", identifier).
+			Msg("📸 No cropped image data returned")
 		return
 	}
 
