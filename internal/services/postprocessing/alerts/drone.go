@@ -77,6 +77,13 @@ func BuildDroneAlert(detection models.Detection, cameraID string, frame []byte) 
 	return payload
 }
 
+// BuildConsolidatedDroneAlert creates a consolidated drone alert for multiple detections
+func BuildConsolidatedDroneAlert(detections []models.Detection, cameraID string, frame []byte) models.AlertPayload {
+	// For now, delegate to general consolidated alert builder
+	// TODO: Implement drone-specific consolidated logic
+	return BuildConsolidatedGeneralAlert(detections, cameraID, frame)
+}
+
 // CreateDroneTitle generates appropriate title for drone detections
 func CreateDroneTitle(label string) string {
 	labelLower := strings.ToLower(label)

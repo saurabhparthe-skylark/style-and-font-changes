@@ -173,8 +173,8 @@ func Load() *Config {
 		ReconnectJitterPct:  getEnvInt("RECONNECT_JITTER_PCT", 20),
 
 		// Frame Processing
-		MaxFPSNoAI:       getEnvInt("MAX_FPS_NO_AI", 10),
-		MaxFPSWithAI:     getEnvInt("MAX_FPS_WITH_AI", 10),
+		MaxFPSNoAI:       getEnvInt("MAX_FPS_NO_AI", 30),
+		MaxFPSWithAI:     getEnvInt("MAX_FPS_WITH_AI", 30),
 		FrameBufferSize:  getEnvInt("FRAME_BUFFER_SIZE", 100),
 		ProcessingBuffer: getEnvInt("PROCESSING_BUFFER_SIZE", 50),
 		PublishingBuffer: getEnvInt("PUBLISHING_BUFFER_SIZE", 20),

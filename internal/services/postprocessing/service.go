@@ -112,42 +112,49 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 
 	result.ValidDetections = len(validDetections)
 
-	// Group detections by track ID for alert processing
-	detectionsByTrack := make(map[int32][]models.Detection)
+	// Group detections by project and detection type for consolidated alert processing
+	detectionsByType := make(map[string][]models.Detection)
 	for _, det := range validDetections {
-		detectionsByTrack[det.TrackID] = append(detectionsByTrack[det.TrackID], det)
+		detectionType := s.getDetectionType(det.ProjectName, det.Label)
+		key := fmt.Sprintf("%s_%s", det.ProjectName, string(detectionType))
+		detectionsByType[key] = append(detectionsByType[key], det)
 	}
 
-	// Process each track separately for alerts
-	for trackID, trackDetections := range detectionsByTrack {
-		// Use the highest confidence detection as the primary one
-		primaryDetection := s.findPrimaryDetection(trackDetections)
+	// Process each detection type group to create ONE alert per type per frame
+	for typeKey, typeDetections := range detectionsByType {
+		if len(typeDetections) == 0 {
+			continue
+		}
 
-		// Determine if alert should be created
+		// Use the highest confidence detection as the primary one for decision making
+		primaryDetection := s.findPrimaryDetection(typeDetections)
+
+		// Determine if alert should be created based on primary detection
 		decision := s.ShouldCreateAlert(primaryDetection, primaryDetection.ProjectName)
 		if !decision.ShouldAlert {
 			continue
 		}
 
-		// Check cooldown
+		// Create a frame-level cooldown key instead of track-level
 		cooldownKey := models.AlertCooldownKey{
 			CameraID:    cameraID,
 			ProjectName: primaryDetection.ProjectName,
-			TrackID:     strconv.Itoa(int(trackID)),
+			TrackID:     fmt.Sprintf("frame_%d_%s", frameMetadata.FrameID, string(s.getDetectionType(primaryDetection.ProjectName, primaryDetection.Label))),
 		}
 
 		if !s.CheckCooldown(cooldownKey, decision.CooldownType) {
 			log.Debug().
 				Str("camera_id", cameraID).
-				Int32("track_id", trackID).
+				Str("type_key", typeKey).
+				Int("detection_count", len(typeDetections)).
 				Str("cooldown_type", decision.CooldownType).
 				Msg("Alert blocked by cooldown")
 			continue
 		}
 
-		// Process alert directly
-		if err := s.processAlertDirectly(primaryDetection, decision, cameraID, frameData, frameMetadata); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("Alert processing error for track %d: %v", trackID, err))
+		// Process consolidated alert with ALL detections of this type
+		if err := s.processConsolidatedAlert(typeDetections, decision, cameraID, frameData, frameMetadata); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("Alert processing error for type %s: %v", typeKey, err))
 		} else {
 			s.UpdateCooldown(cooldownKey, decision.CooldownType)
 			result.AlertsCreated++
@@ -234,40 +241,44 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 	}
 }
 
-// processAlertDirectly processes an alert immediately without workers
-func (s *Service) processAlertDirectly(detection models.Detection, decision models.AlertDecision, cameraID string, frameData []byte, frameMetadata models.FrameMetadata) error {
+// processConsolidatedAlert processes multiple detections into a single consolidated alert
+func (s *Service) processConsolidatedAlert(detections []models.Detection, decision models.AlertDecision, cameraID string, frameData []byte, frameMetadata models.FrameMetadata) error {
 	start := time.Now()
 
-	// Use specialized build functions based on alert type
+	if len(detections) == 0 {
+		return fmt.Errorf("no detections provided for consolidated alert")
+	}
+
+	// Use specialized build functions based on alert type with ALL detections
 	var payload models.AlertPayload
 
 	switch decision.AlertType {
 	case models.AlertTypePPEViolation:
-		payload = alerts.BuildPPEAlert(detection, cameraID, frameData)
+		payload = alerts.BuildConsolidatedPPEAlert(detections, cameraID, frameData)
 
 	case models.AlertTypeCellphoneUsage:
-		payload = alerts.BuildCellphoneAlert(detection, cameraID, frameData)
+		payload = alerts.BuildConsolidatedCellphoneAlert(detections, cameraID, frameData)
 
 	case models.AlertTypeDroneDetection:
-		payload = alerts.BuildDroneAlert(detection, cameraID, frameData)
+		payload = alerts.BuildConsolidatedDroneAlert(detections, cameraID, frameData)
 
 	case models.AlertTypeFireSmoke:
-		payload = alerts.BuildFireSmokeAlert(detection, cameraID, frameData)
+		payload = alerts.BuildConsolidatedFireSmokeAlert(detections, cameraID, frameData)
 
 	case models.AlertTypeAnomalyDetection:
-		payload = alerts.BuildAnomalyAlert(detection, cameraID, frameData)
+		payload = alerts.BuildConsolidatedAnomalyAlert(detections, cameraID, frameData)
 
 	case models.AlertTypeSelfLearned:
-		payload = alerts.BuildSelfLearningAlert(detection, cameraID, frameData)
+		payload = alerts.BuildConsolidatedSelfLearningAlert(detections, cameraID, frameData)
 
 	case models.AlertTypeHighConfidence:
-		payload = alerts.BuildGeneralAlert(detection, cameraID, frameData)
+		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, frameData)
 
 	default:
 		log.Warn().
 			Str("alert_type", string(decision.AlertType)).
 			Msg("Unknown alert type, using general alert builder")
-		payload = alerts.BuildGeneralAlert(detection, cameraID, frameData)
+		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, frameData)
 	}
 
 	// Add processing metadata
@@ -280,11 +291,13 @@ func (s *Service) processAlertDirectly(detection models.Detection, decision mode
 		"height": frameMetadata.Height,
 	}
 	payload.Metadata["processing_timestamp"] = time.Now()
+	payload.Metadata["total_detections"] = len(detections)
+	payload.Metadata["detection_levels"] = s.getDetectionLevelsSummary(detections)
 
 	// Update detection record with frame metadata
 	if payload.DetectionRecord.FrameID == 0 {
 		payload.DetectionRecord.FrameID = frameMetadata.FrameID
-		payload.DetectionRecord.DetectionCountInFrame = frameMetadata.AllDetCount
+		payload.DetectionRecord.DetectionCountInFrame = len(detections) // Use actual detection count
 	}
 
 	// Skip payload optimization for performance (NATS limits will be increased)
@@ -293,7 +306,7 @@ func (s *Service) processAlertDirectly(detection models.Detection, decision mode
 			log.Warn().
 				Err(err).
 				Str("camera_id", cameraID).
-				Int32("track_id", detection.TrackID).
+				Int("detection_count", len(detections)).
 				Str("alert_type", string(payload.Alert.AlertType)).
 				Msg("Payload size validation failed, but continuing for performance")
 		}
@@ -309,22 +322,31 @@ func (s *Service) processAlertDirectly(detection models.Detection, decision mode
 		log.Error().
 			Err(err).
 			Str("camera_id", cameraID).
-			Int32("track_id", detection.TrackID).
+			Int("detection_count", len(detections)).
 			Str("alert_type", string(payload.Alert.AlertType)).
-			Msg("Failed to publish alert")
+			Msg("Failed to publish consolidated alert")
 		return err
 	}
 
 	processingTime := time.Since(start)
 	log.Info().
 		Str("camera_id", cameraID).
-		Int32("track_id", detection.TrackID).
+		Int("detection_count", len(detections)).
 		Str("alert_type", string(payload.Alert.AlertType)).
 		Str("severity", string(payload.Alert.Severity)).
 		Dur("processing_time", processingTime).
-		Msg("🚀 Alert published successfully")
+		Msg("🚀 Consolidated alert published successfully")
 
 	return nil
+}
+
+// getDetectionLevelsSummary creates a summary of detection levels for metadata
+func (s *Service) getDetectionLevelsSummary(detections []models.Detection) map[string]int {
+	summary := make(map[string]int)
+	for _, det := range detections {
+		summary[string(det.DetectionLevel)]++
+	}
+	return summary
 }
 
 // processSuppressionDirectly processes a suppression immediately without workers

@@ -94,6 +94,13 @@ func BuildAnomalyAlert(detection models.Detection, cameraID string, frame []byte
 	return payload
 }
 
+// BuildConsolidatedAnomalyAlert creates a consolidated anomaly alert for multiple detections
+func BuildConsolidatedAnomalyAlert(detections []models.Detection, cameraID string, frame []byte) models.AlertPayload {
+	// For now, delegate to general consolidated alert builder
+	// TODO: Implement anomaly-specific consolidated logic
+	return BuildConsolidatedGeneralAlert(detections, cameraID, frame)
+}
+
 // CreateAnomalyTitle generates appropriate title for anomaly detections
 func CreateAnomalyTitle(label string) string {
 	// Clean up the anomaly label for display

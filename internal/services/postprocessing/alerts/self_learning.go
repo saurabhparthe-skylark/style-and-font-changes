@@ -99,6 +99,13 @@ func BuildSelfLearningAlert(detection models.Detection, cameraID string, frame [
 	return payload
 }
 
+// BuildConsolidatedSelfLearningAlert creates a consolidated self-learning alert for multiple detections
+func BuildConsolidatedSelfLearningAlert(detections []models.Detection, cameraID string, frame []byte) models.AlertPayload {
+	// For now, delegate to general consolidated alert builder
+	// TODO: Implement self-learning-specific consolidated logic
+	return BuildConsolidatedGeneralAlert(detections, cameraID, frame)
+}
+
 // CreateSelfLearningTitle generates appropriate title for self-learning detections
 func CreateSelfLearningTitle(label string) string {
 	// Clean up the label for display

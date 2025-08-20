@@ -2,15 +2,19 @@ package camera
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"image"
 	"image/color"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"gocv.io/x/gocv"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"kepler-worker-go/internal/config"
@@ -83,7 +87,7 @@ func NewFrameProcessorWithCamera(cfg *config.Config, camera *models.Camera) (*Fr
 	return fp, nil
 }
 
-// initGRPCConnection establishes connection to AI server
+// initGRPCConnection establishes connection to AI server with support for both HTTP and HTTPS
 func (fp *FrameProcessor) initGRPCConnection(endpoint string) error {
 	if fp.grpcConn != nil && fp.aiEndpoint == endpoint {
 		return nil // Already connected to this endpoint
@@ -94,27 +98,122 @@ func (fp *FrameProcessor) initGRPCConnection(endpoint string) error {
 		fp.grpcConn.Close()
 	}
 
-	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Parse and normalize the endpoint
+	normalizedEndpoint, creds, err := fp.parseGRPCEndpoint(endpoint)
 	if err != nil {
-		return fmt.Errorf("failed to connect to AI service at %s: %w", endpoint, err)
+		return fmt.Errorf("failed to parse AI endpoint %s: %w", endpoint, err)
+	}
+
+	log.Info().
+		Str("original_endpoint", endpoint).
+		Str("normalized_endpoint", normalizedEndpoint).
+		Bool("use_tls", creds.Info().SecurityProtocol == "tls").
+		Msg("Connecting to AI gRPC service")
+
+	// Create gRPC connection with appropriate credentials
+	conn, err := grpc.NewClient(normalizedEndpoint, grpc.WithTransportCredentials(creds))
+	if err != nil {
+		return fmt.Errorf("failed to connect to AI service at %s: %w", normalizedEndpoint, err)
 	}
 
 	// Test connection with quick health check
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	client := pb.NewDetectionServiceClient(conn)
 	if _, err := client.HealthCheck(ctx, &pb.Empty{}); err != nil {
 		conn.Close()
-		return fmt.Errorf("AI service health check failed at %s: %w", endpoint, err)
+		return fmt.Errorf("AI service health check failed at %s: %w", normalizedEndpoint, err)
 	}
 
 	fp.grpcConn = conn
 	fp.grpcClient = client
 	fp.aiEndpoint = endpoint
 
-	log.Info().Str("ai_endpoint", endpoint).Msg("AI gRPC connection established")
+	log.Info().
+		Str("ai_endpoint", normalizedEndpoint).
+		Msg("AI gRPC connection successfully established")
 	return nil
+}
+
+// parseGRPCEndpoint parses and normalizes a gRPC endpoint, returning the normalized endpoint and appropriate credentials
+// Supported endpoint formats:
+// - https://example.com (defaults to port 443)
+// - https://example.com:9443
+// - http://example.com (defaults to port 80)
+// - http://example.com:50051
+// - example.com (domain without port, defaults to https://example.com:443)
+// - example.com:443 (domain with secure port, defaults to https)
+// - example.com:50051 (domain with custom port, defaults to http)
+// - 192.168.1.76:50052 (IP with port, defaults to http)
+func (fp *FrameProcessor) parseGRPCEndpoint(endpoint string) (string, credentials.TransportCredentials, error) {
+	// Handle case where endpoint doesn't have a scheme
+	if !strings.Contains(endpoint, "://") {
+		// Check if it looks like a domain name (contains dots) vs IP:port
+		if strings.Contains(endpoint, ".") && !strings.Contains(endpoint, ":") {
+			// Domain without port, assume HTTPS gRPC on port 443
+			endpoint = "https://" + endpoint + ":443"
+		} else if strings.Contains(endpoint, ":") {
+			// Has port, check if it's a common secure port
+			parts := strings.Split(endpoint, ":")
+			if len(parts) == 2 {
+				if port, err := strconv.Atoi(parts[1]); err == nil {
+					// Common secure gRPC ports: 443, 8443, 9443
+					if port == 443 || port == 8443 || port == 9443 {
+						endpoint = "https://" + endpoint
+					} else {
+						endpoint = "http://" + endpoint
+					}
+				} else {
+					// Invalid port, default to HTTP
+					endpoint = "http://" + endpoint
+				}
+			}
+		} else {
+			// Just a hostname/IP, default to HTTPS with port 443
+			endpoint = "https://" + endpoint + ":443"
+		}
+	}
+
+	// Parse the URL
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", nil, fmt.Errorf("invalid endpoint URL: %w", err)
+	}
+
+	// Build the target address
+	host := u.Host
+	if u.Port() == "" {
+		// Add default ports if not specified
+		switch u.Scheme {
+		case "https":
+			host = u.Hostname() + ":443"
+		case "http":
+			host = u.Hostname() + ":80"
+		default:
+			return "", nil, fmt.Errorf("unsupported scheme: %s", u.Scheme)
+		}
+	}
+
+	// Create appropriate credentials
+	var creds credentials.TransportCredentials
+	switch u.Scheme {
+	case "https":
+		// Use TLS credentials for HTTPS
+		tlsConfig := &tls.Config{
+			ServerName: u.Hostname(),
+			// You can add more TLS configuration here if needed
+			// InsecureSkipVerify: false, // Set to true only for testing with self-signed certs
+		}
+		creds = credentials.NewTLS(tlsConfig)
+	case "http":
+		// Use insecure credentials for HTTP
+		creds = insecure.NewCredentials()
+	default:
+		return "", nil, fmt.Errorf("unsupported scheme: %s (supported: http, https)", u.Scheme)
+	}
+
+	return host, creds, nil
 }
 
 // Shutdown closes gRPC connections
@@ -335,7 +434,7 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		projectCount := 0
 
 		for _, det := range projectDetections.GetPrimaryDetections() {
-			modelDet := fp.convertProtoToModels(det, projectName)
+			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelPrimary)
 			if modelDet != nil {
 				result.Detections = append(result.Detections, *modelDet)
 				projectCount++
@@ -343,7 +442,7 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		}
 
 		for _, det := range projectDetections.GetSecondaryDetections() {
-			modelDet := fp.convertProtoToModels(det, projectName)
+			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelSecondary)
 			if modelDet != nil {
 				result.Detections = append(result.Detections, *modelDet)
 				projectCount++
@@ -351,7 +450,7 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		}
 
 		for _, det := range projectDetections.GetTertiaryDetections() {
-			modelDet := fp.convertProtoToModels(det, projectName)
+			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelTertiary)
 			if modelDet != nil {
 				result.Detections = append(result.Detections, *modelDet)
 				projectCount++
@@ -362,7 +461,7 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 	}
 }
 
-func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName string) *models.Detection {
+func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName string, detectionLevel models.DetectionLevel) *models.Detection {
 	if det == nil || len(det.Bbox) != 4 {
 		return nil
 	}
@@ -372,8 +471,10 @@ func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName st
 		falseMatchID = ""
 	}
 
-	trueMatchID := ""
-	// Handle true_match_id if it exists in the proto (you may need to add this field)
+	trueMatchID := det.GetTrueMatchId()
+	if trueMatchID == "None" || trueMatchID == "" {
+		trueMatchID = ""
+	}
 
 	modelDet := &models.Detection{
 		TrackID:          det.GetTrackId(),
@@ -382,6 +483,7 @@ func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName st
 		ClassName:        det.GetClassName(),
 		BBox:             det.GetBbox(),
 		Timestamp:        time.Now(),
+		DetectionLevel:   detectionLevel,
 		ProjectName:      projectName,
 		ParentID:         det.GetParentId(),
 		SendAlert:        det.GetSendAlert(),
@@ -688,11 +790,4 @@ func containsString(str, substr string) bool {
 	return len(str) >= len(substr) && str[:len(substr)] == substr ||
 		len(str) > len(substr) && str[len(str)-len(substr):] == substr ||
 		(len(str) > len(substr) && strings.Contains(str, substr))
-}
-
-func (fp *FrameProcessor) getAIEndpoint() string {
-	if fp.camera != nil {
-		return fp.camera.AIEndpoint
-	}
-	return fp.cfg.AIGRPCURL
 }

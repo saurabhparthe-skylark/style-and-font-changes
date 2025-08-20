@@ -4,7 +4,7 @@
 // - protoc             v3.21.12
 // source: proto/detection.proto
 
-package detection
+package proto
 
 import (
 	context "context"
@@ -22,11 +22,13 @@ const (
 	DetectionService_InferDetection_FullMethodName       = "/detection.DetectionService/InferDetection"
 	DetectionService_SaveFalseDetection_FullMethodName   = "/detection.DetectionService/SaveFalseDetection"
 	DetectionService_RemoveFalseDetection_FullMethodName = "/detection.DetectionService/RemoveFalseDetection"
+	DetectionService_SaveTrueDetection_FullMethodName    = "/detection.DetectionService/SaveTrueDetection"
+	DetectionService_RemoveTrueDetection_FullMethodName  = "/detection.DetectionService/RemoveTrueDetection"
+	DetectionService_ToggleMode_FullMethodName           = "/detection.DetectionService/ToggleMode"
 	DetectionService_HealthCheck_FullMethodName          = "/detection.DetectionService/HealthCheck"
 	DetectionService_GetActivePipelines_FullMethodName   = "/detection.DetectionService/GetActivePipelines"
 	DetectionService_RemovePipelines_FullMethodName      = "/detection.DetectionService/RemovePipelines"
 	DetectionService_SetROI_FullMethodName               = "/detection.DetectionService/SetROI"
-	DetectionService_InitializeROI_FullMethodName        = "/detection.DetectionService/InitializeROI"
 	DetectionService_AddFace_FullMethodName              = "/detection.DetectionService/AddFace"
 )
 
@@ -40,6 +42,12 @@ type DetectionServiceClient interface {
 	SaveFalseDetection(ctx context.Context, in *ROIRequest, opts ...grpc.CallOption) (*StatusResponse, error)
 	// Remove false detection data
 	RemoveFalseDetection(ctx context.Context, in *RemoveROIRequest, opts ...grpc.CallOption) (*StatusResponse, error)
+	// Save true detection data to True Bucket
+	SaveTrueDetection(ctx context.Context, in *TrueDetectionRequest, opts ...grpc.CallOption) (*StatusResponse, error)
+	// Remove true detection data from True Bucket
+	RemoveTrueDetection(ctx context.Context, in *RemoveTrueDetectionRequest, opts ...grpc.CallOption) (*StatusResponse, error)
+	// Toggle outlier detection mode in true_bucket_rpn
+	ToggleMode(ctx context.Context, in *ToggleRequest, opts ...grpc.CallOption) (*ToggleResponse, error)
 	// Health check endpoint
 	HealthCheck(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	// Get active pipelines
@@ -48,8 +56,6 @@ type DetectionServiceClient interface {
 	RemovePipelines(ctx context.Context, in *CameraIdRequest, opts ...grpc.CallOption) (*StatusResponse, error)
 	// Set ROI for a solution
 	SetROI(ctx context.Context, in *SolutionROIRequest, opts ...grpc.CallOption) (*StatusResponse, error)
-	// Initialize ROI for camera startup or ROI updates (send once, not every frame)
-	InitializeROI(ctx context.Context, in *ROIRequest, opts ...grpc.CallOption) (*StatusResponse, error)
 	// Add a face to the face embeddings database (for face_detection_sr project)
 	AddFace(ctx context.Context, in *AddFaceRequest, opts ...grpc.CallOption) (*StatusResponse, error)
 }
@@ -86,6 +92,36 @@ func (c *detectionServiceClient) RemoveFalseDetection(ctx context.Context, in *R
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StatusResponse)
 	err := c.cc.Invoke(ctx, DetectionService_RemoveFalseDetection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *detectionServiceClient) SaveTrueDetection(ctx context.Context, in *TrueDetectionRequest, opts ...grpc.CallOption) (*StatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatusResponse)
+	err := c.cc.Invoke(ctx, DetectionService_SaveTrueDetection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *detectionServiceClient) RemoveTrueDetection(ctx context.Context, in *RemoveTrueDetectionRequest, opts ...grpc.CallOption) (*StatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatusResponse)
+	err := c.cc.Invoke(ctx, DetectionService_RemoveTrueDetection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *detectionServiceClient) ToggleMode(ctx context.Context, in *ToggleRequest, opts ...grpc.CallOption) (*ToggleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ToggleResponse)
+	err := c.cc.Invoke(ctx, DetectionService_ToggleMode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -132,16 +168,6 @@ func (c *detectionServiceClient) SetROI(ctx context.Context, in *SolutionROIRequ
 	return out, nil
 }
 
-func (c *detectionServiceClient) InitializeROI(ctx context.Context, in *ROIRequest, opts ...grpc.CallOption) (*StatusResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(StatusResponse)
-	err := c.cc.Invoke(ctx, DetectionService_InitializeROI_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *detectionServiceClient) AddFace(ctx context.Context, in *AddFaceRequest, opts ...grpc.CallOption) (*StatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StatusResponse)
@@ -162,6 +188,12 @@ type DetectionServiceServer interface {
 	SaveFalseDetection(context.Context, *ROIRequest) (*StatusResponse, error)
 	// Remove false detection data
 	RemoveFalseDetection(context.Context, *RemoveROIRequest) (*StatusResponse, error)
+	// Save true detection data to True Bucket
+	SaveTrueDetection(context.Context, *TrueDetectionRequest) (*StatusResponse, error)
+	// Remove true detection data from True Bucket
+	RemoveTrueDetection(context.Context, *RemoveTrueDetectionRequest) (*StatusResponse, error)
+	// Toggle outlier detection mode in true_bucket_rpn
+	ToggleMode(context.Context, *ToggleRequest) (*ToggleResponse, error)
 	// Health check endpoint
 	HealthCheck(context.Context, *Empty) (*HealthResponse, error)
 	// Get active pipelines
@@ -170,8 +202,6 @@ type DetectionServiceServer interface {
 	RemovePipelines(context.Context, *CameraIdRequest) (*StatusResponse, error)
 	// Set ROI for a solution
 	SetROI(context.Context, *SolutionROIRequest) (*StatusResponse, error)
-	// Initialize ROI for camera startup or ROI updates (send once, not every frame)
-	InitializeROI(context.Context, *ROIRequest) (*StatusResponse, error)
 	// Add a face to the face embeddings database (for face_detection_sr project)
 	AddFace(context.Context, *AddFaceRequest) (*StatusResponse, error)
 	mustEmbedUnimplementedDetectionServiceServer()
@@ -193,6 +223,15 @@ func (UnimplementedDetectionServiceServer) SaveFalseDetection(context.Context, *
 func (UnimplementedDetectionServiceServer) RemoveFalseDetection(context.Context, *RemoveROIRequest) (*StatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveFalseDetection not implemented")
 }
+func (UnimplementedDetectionServiceServer) SaveTrueDetection(context.Context, *TrueDetectionRequest) (*StatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SaveTrueDetection not implemented")
+}
+func (UnimplementedDetectionServiceServer) RemoveTrueDetection(context.Context, *RemoveTrueDetectionRequest) (*StatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveTrueDetection not implemented")
+}
+func (UnimplementedDetectionServiceServer) ToggleMode(context.Context, *ToggleRequest) (*ToggleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ToggleMode not implemented")
+}
 func (UnimplementedDetectionServiceServer) HealthCheck(context.Context, *Empty) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HealthCheck not implemented")
 }
@@ -204,9 +243,6 @@ func (UnimplementedDetectionServiceServer) RemovePipelines(context.Context, *Cam
 }
 func (UnimplementedDetectionServiceServer) SetROI(context.Context, *SolutionROIRequest) (*StatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetROI not implemented")
-}
-func (UnimplementedDetectionServiceServer) InitializeROI(context.Context, *ROIRequest) (*StatusResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method InitializeROI not implemented")
 }
 func (UnimplementedDetectionServiceServer) AddFace(context.Context, *AddFaceRequest) (*StatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddFace not implemented")
@@ -286,6 +322,60 @@ func _DetectionService_RemoveFalseDetection_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DetectionService_SaveTrueDetection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TrueDetectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DetectionServiceServer).SaveTrueDetection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DetectionService_SaveTrueDetection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DetectionServiceServer).SaveTrueDetection(ctx, req.(*TrueDetectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DetectionService_RemoveTrueDetection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveTrueDetectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DetectionServiceServer).RemoveTrueDetection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DetectionService_RemoveTrueDetection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DetectionServiceServer).RemoveTrueDetection(ctx, req.(*RemoveTrueDetectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DetectionService_ToggleMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ToggleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DetectionServiceServer).ToggleMode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DetectionService_ToggleMode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DetectionServiceServer).ToggleMode(ctx, req.(*ToggleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DetectionService_HealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -358,24 +448,6 @@ func _DetectionService_SetROI_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DetectionService_InitializeROI_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ROIRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DetectionServiceServer).InitializeROI(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DetectionService_InitializeROI_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DetectionServiceServer).InitializeROI(ctx, req.(*ROIRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _DetectionService_AddFace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AddFaceRequest)
 	if err := dec(in); err != nil {
@@ -414,6 +486,18 @@ var DetectionService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DetectionService_RemoveFalseDetection_Handler,
 		},
 		{
+			MethodName: "SaveTrueDetection",
+			Handler:    _DetectionService_SaveTrueDetection_Handler,
+		},
+		{
+			MethodName: "RemoveTrueDetection",
+			Handler:    _DetectionService_RemoveTrueDetection_Handler,
+		},
+		{
+			MethodName: "ToggleMode",
+			Handler:    _DetectionService_ToggleMode_Handler,
+		},
+		{
 			MethodName: "HealthCheck",
 			Handler:    _DetectionService_HealthCheck_Handler,
 		},
@@ -428,10 +512,6 @@ var DetectionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetROI",
 			Handler:    _DetectionService_SetROI_Handler,
-		},
-		{
-			MethodName: "InitializeROI",
-			Handler:    _DetectionService_InitializeROI_Handler,
 		},
 		{
 			MethodName: "AddFace",

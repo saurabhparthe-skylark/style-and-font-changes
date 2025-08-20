@@ -19,6 +19,15 @@ const (
 	DetectionTypeGeneral     DetectionType = "general_detection"
 )
 
+// DetectionLevel represents the level/priority of detection from AI
+type DetectionLevel string
+
+const (
+	DetectionLevelPrimary   DetectionLevel = "primary"
+	DetectionLevelSecondary DetectionLevel = "secondary"
+	DetectionLevelTertiary  DetectionLevel = "tertiary"
+)
+
 // AlertType represents different types of alerts that can be generated
 type AlertType string
 
@@ -45,12 +54,13 @@ const (
 // Detection represents a standardized detection from the AI server
 type Detection struct {
 	// Core detection fields
-	TrackID   int32     `json:"track_id"`
-	Score     float32   `json:"score"`
-	Label     string    `json:"label"`
-	ClassName string    `json:"class_name"`
-	BBox      []float32 `json:"bbox"`
-	Timestamp time.Time `json:"timestamp"`
+	TrackID        int32          `json:"track_id"`
+	Score          float32        `json:"score"`
+	Label          string         `json:"label"`
+	ClassName      string         `json:"class_name"`
+	BBox           []float32      `json:"bbox"`
+	Timestamp      time.Time      `json:"timestamp"`
+	DetectionLevel DetectionLevel `json:"detection_level"`
 
 	// Project and processing info
 	ProjectName string `json:"project_name"`
@@ -102,7 +112,7 @@ type Detection struct {
 	VesselType *string `json:"vessel_type,omitempty"`
 
 	// Face recognition specific fields
-	RecognitionID    *int32   `json:"recognition_id,omitempty"`
+	RecognitionID    *string  `json:"recognition_id,omitempty"`
 	RecognitionScore *float32 `json:"recognition_score,omitempty"`
 }
 

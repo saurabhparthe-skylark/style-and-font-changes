@@ -4,7 +4,7 @@
 // 	protoc        v3.21.12
 // source: proto/detection.proto
 
-package detection
+package proto
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -106,7 +106,7 @@ func (x *CameraIdRequest) GetCameraId() string {
 // Request message for frame processing
 type FrameRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Image         []byte                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"` // Base64 encoded image
+	Image         []byte                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"` // Encoded image bytes (e.g., JPEG/PNG)
 	CameraId      string                 `protobuf:"bytes,2,opt,name=camera_id,json=cameraId,proto3" json:"camera_id,omitempty"`
 	ProjectNames  []string               `protobuf:"bytes,3,rep,name=project_names,json=projectNames,proto3" json:"project_names,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -171,7 +171,7 @@ type ROIRequest struct {
 	CameraId      string                 `protobuf:"bytes,2,opt,name=camera_id,json=cameraId,proto3" json:"camera_id,omitempty"`
 	RoiId         string                 `protobuf:"bytes,3,opt,name=roi_id,json=roiId,proto3" json:"roi_id,omitempty"`
 	ProjectName   string                 `protobuf:"bytes,4,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
-	ModelName     string                 `protobuf:"bytes,5,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"` // Use "ppe_detection" for PPE model
+	ModelName     string                 `protobuf:"bytes,5,opt,name=model_name,json=modelName,proto3" json:"model_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -310,6 +310,144 @@ func (x *RemoveROIRequest) GetModelName() string {
 	return ""
 }
 
+// Request message for saving true detections to True Bucket
+type TrueDetectionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CameraId      string                 `protobuf:"bytes,1,opt,name=camera_id,json=cameraId,proto3" json:"camera_id,omitempty"`
+	Image         string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"` // Base64 encoded image
+	ProjectName   string                 `protobuf:"bytes,3,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
+	ObjectType    string                 `protobuf:"bytes,4,opt,name=object_type,json=objectType,proto3" json:"object_type,omitempty"` // e.g., "Car", "Truck", "Person", etc.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrueDetectionRequest) Reset() {
+	*x = TrueDetectionRequest{}
+	mi := &file_proto_detection_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrueDetectionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrueDetectionRequest) ProtoMessage() {}
+
+func (x *TrueDetectionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_detection_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrueDetectionRequest.ProtoReflect.Descriptor instead.
+func (*TrueDetectionRequest) Descriptor() ([]byte, []int) {
+	return file_proto_detection_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *TrueDetectionRequest) GetCameraId() string {
+	if x != nil {
+		return x.CameraId
+	}
+	return ""
+}
+
+func (x *TrueDetectionRequest) GetImage() string {
+	if x != nil {
+		return x.Image
+	}
+	return ""
+}
+
+func (x *TrueDetectionRequest) GetProjectName() string {
+	if x != nil {
+		return x.ProjectName
+	}
+	return ""
+}
+
+func (x *TrueDetectionRequest) GetObjectType() string {
+	if x != nil {
+		return x.ObjectType
+	}
+	return ""
+}
+
+// Request message for removing true detections from True Bucket
+type RemoveTrueDetectionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CameraId      string                 `protobuf:"bytes,1,opt,name=camera_id,json=cameraId,proto3" json:"camera_id,omitempty"`
+	ProjectName   string                 `protobuf:"bytes,2,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
+	ObjectType    string                 `protobuf:"bytes,3,opt,name=object_type,json=objectType,proto3" json:"object_type,omitempty"`          // e.g., "Car", "Truck", "Person", etc.
+	DetectionId   *string                `protobuf:"bytes,4,opt,name=detection_id,json=detectionId,proto3,oneof" json:"detection_id,omitempty"` // Optional: if provided, removes specific detection; if not provided, removes all for object_type
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveTrueDetectionRequest) Reset() {
+	*x = RemoveTrueDetectionRequest{}
+	mi := &file_proto_detection_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveTrueDetectionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveTrueDetectionRequest) ProtoMessage() {}
+
+func (x *RemoveTrueDetectionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_detection_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveTrueDetectionRequest.ProtoReflect.Descriptor instead.
+func (*RemoveTrueDetectionRequest) Descriptor() ([]byte, []int) {
+	return file_proto_detection_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RemoveTrueDetectionRequest) GetCameraId() string {
+	if x != nil {
+		return x.CameraId
+	}
+	return ""
+}
+
+func (x *RemoveTrueDetectionRequest) GetProjectName() string {
+	if x != nil {
+		return x.ProjectName
+	}
+	return ""
+}
+
+func (x *RemoveTrueDetectionRequest) GetObjectType() string {
+	if x != nil {
+		return x.ObjectType
+	}
+	return ""
+}
+
+func (x *RemoveTrueDetectionRequest) GetDetectionId() string {
+	if x != nil && x.DetectionId != nil {
+		return *x.DetectionId
+	}
+	return ""
+}
+
 type Point struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Values        []float32              `protobuf:"fixed32,1,rep,packed,name=values,proto3" json:"values,omitempty"` // This represents List[int]
@@ -319,7 +457,7 @@ type Point struct {
 
 func (x *Point) Reset() {
 	*x = Point{}
-	mi := &file_proto_detection_proto_msgTypes[5]
+	mi := &file_proto_detection_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -331,7 +469,7 @@ func (x *Point) String() string {
 func (*Point) ProtoMessage() {}
 
 func (x *Point) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[5]
+	mi := &file_proto_detection_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -344,7 +482,7 @@ func (x *Point) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Point.ProtoReflect.Descriptor instead.
 func (*Point) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{5}
+	return file_proto_detection_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Point) GetValues() []float32 {
@@ -367,7 +505,7 @@ type SolutionROIRequest struct {
 
 func (x *SolutionROIRequest) Reset() {
 	*x = SolutionROIRequest{}
-	mi := &file_proto_detection_proto_msgTypes[6]
+	mi := &file_proto_detection_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -379,7 +517,7 @@ func (x *SolutionROIRequest) String() string {
 func (*SolutionROIRequest) ProtoMessage() {}
 
 func (x *SolutionROIRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[6]
+	mi := &file_proto_detection_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -392,7 +530,7 @@ func (x *SolutionROIRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SolutionROIRequest.ProtoReflect.Descriptor instead.
 func (*SolutionROIRequest) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{6}
+	return file_proto_detection_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SolutionROIRequest) GetCameraId() string {
@@ -433,7 +571,7 @@ type DetectionResponse struct {
 
 func (x *DetectionResponse) Reset() {
 	*x = DetectionResponse{}
-	mi := &file_proto_detection_proto_msgTypes[7]
+	mi := &file_proto_detection_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -445,7 +583,7 @@ func (x *DetectionResponse) String() string {
 func (*DetectionResponse) ProtoMessage() {}
 
 func (x *DetectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[7]
+	mi := &file_proto_detection_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -458,7 +596,7 @@ func (x *DetectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetectionResponse.ProtoReflect.Descriptor instead.
 func (*DetectionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{7}
+	return file_proto_detection_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DetectionResponse) GetResults() map[string]*ProjectDetections {
@@ -481,7 +619,7 @@ type ProjectDetections struct {
 
 func (x *ProjectDetections) Reset() {
 	*x = ProjectDetections{}
-	mi := &file_proto_detection_proto_msgTypes[8]
+	mi := &file_proto_detection_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -493,7 +631,7 @@ func (x *ProjectDetections) String() string {
 func (*ProjectDetections) ProtoMessage() {}
 
 func (x *ProjectDetections) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[8]
+	mi := &file_proto_detection_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -506,7 +644,7 @@ func (x *ProjectDetections) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectDetections.ProtoReflect.Descriptor instead.
 func (*ProjectDetections) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{8}
+	return file_proto_detection_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ProjectDetections) GetPrimaryDetections() []*Detection {
@@ -549,6 +687,8 @@ type Detection struct {
 	FalseMatchId string                 `protobuf:"bytes,7,opt,name=false_match_id,json=falseMatchId,proto3" json:"false_match_id,omitempty"`
 	SendAlert    bool                   `protobuf:"varint,8,opt,name=send_alert,json=sendAlert,proto3" json:"send_alert,omitempty"`
 	FrameNum     int32                  `protobuf:"varint,9,opt,name=frame_num,json=frameNum,proto3" json:"frame_num,omitempty"`
+	IsRpn        bool                   `protobuf:"varint,27,opt,name=is_rpn,json=isRpn,proto3" json:"is_rpn,omitempty"`
+	TrueMatchId  *string                `protobuf:"bytes,28,opt,name=true_match_id,json=trueMatchId,proto3,oneof" json:"true_match_id,omitempty"`
 	// PPE Alerts (optional fields)
 	HasVest    *bool    `protobuf:"varint,10,opt,name=has_vest,json=hasVest,proto3,oneof" json:"has_vest,omitempty"`
 	HasHelmet  *bool    `protobuf:"varint,11,opt,name=has_helmet,json=hasHelmet,proto3,oneof" json:"has_helmet,omitempty"`
@@ -572,7 +712,7 @@ type Detection struct {
 	// vessel Classification
 	VesselType *string `protobuf:"bytes,23,opt,name=vessel_type,json=vesselType,proto3,oneof" json:"vessel_type,omitempty"`
 	// face Recognition
-	RecognitionId    *int32   `protobuf:"varint,24,opt,name=recognition_id,json=recognitionId,proto3,oneof" json:"recognition_id,omitempty"`
+	RecognitionId    *string  `protobuf:"bytes,24,opt,name=recognition_id,json=recognitionId,proto3,oneof" json:"recognition_id,omitempty"`
 	RecognitionScore *float32 `protobuf:"fixed32,25,opt,name=recognition_score,json=recognitionScore,proto3,oneof" json:"recognition_score,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -580,7 +720,7 @@ type Detection struct {
 
 func (x *Detection) Reset() {
 	*x = Detection{}
-	mi := &file_proto_detection_proto_msgTypes[9]
+	mi := &file_proto_detection_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -592,7 +732,7 @@ func (x *Detection) String() string {
 func (*Detection) ProtoMessage() {}
 
 func (x *Detection) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[9]
+	mi := &file_proto_detection_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -605,7 +745,7 @@ func (x *Detection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Detection.ProtoReflect.Descriptor instead.
 func (*Detection) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{9}
+	return file_proto_detection_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Detection) GetBbox() []float32 {
@@ -669,6 +809,20 @@ func (x *Detection) GetFrameNum() int32 {
 		return x.FrameNum
 	}
 	return 0
+}
+
+func (x *Detection) GetIsRpn() bool {
+	if x != nil {
+		return x.IsRpn
+	}
+	return false
+}
+
+func (x *Detection) GetTrueMatchId() string {
+	if x != nil && x.TrueMatchId != nil {
+		return *x.TrueMatchId
+	}
+	return ""
 }
 
 func (x *Detection) GetHasVest() bool {
@@ -776,11 +930,11 @@ func (x *Detection) GetVesselType() string {
 	return ""
 }
 
-func (x *Detection) GetRecognitionId() int32 {
+func (x *Detection) GetRecognitionId() string {
 	if x != nil && x.RecognitionId != nil {
 		return *x.RecognitionId
 	}
-	return 0
+	return ""
 }
 
 func (x *Detection) GetRecognitionScore() float32 {
@@ -801,7 +955,7 @@ type CrowdInfo struct {
 
 func (x *CrowdInfo) Reset() {
 	*x = CrowdInfo{}
-	mi := &file_proto_detection_proto_msgTypes[10]
+	mi := &file_proto_detection_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -813,7 +967,7 @@ func (x *CrowdInfo) String() string {
 func (*CrowdInfo) ProtoMessage() {}
 
 func (x *CrowdInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[10]
+	mi := &file_proto_detection_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -826,7 +980,7 @@ func (x *CrowdInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CrowdInfo.ProtoReflect.Descriptor instead.
 func (*CrowdInfo) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{10}
+	return file_proto_detection_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CrowdInfo) GetRectangle() []float32 {
@@ -860,7 +1014,7 @@ type CrowdDetectionResult struct {
 
 func (x *CrowdDetectionResult) Reset() {
 	*x = CrowdDetectionResult{}
-	mi := &file_proto_detection_proto_msgTypes[11]
+	mi := &file_proto_detection_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -872,7 +1026,7 @@ func (x *CrowdDetectionResult) String() string {
 func (*CrowdDetectionResult) ProtoMessage() {}
 
 func (x *CrowdDetectionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[11]
+	mi := &file_proto_detection_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -885,7 +1039,7 @@ func (x *CrowdDetectionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CrowdDetectionResult.ProtoReflect.Descriptor instead.
 func (*CrowdDetectionResult) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{11}
+	return file_proto_detection_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CrowdDetectionResult) GetCrowds() []*CrowdInfo {
@@ -933,7 +1087,7 @@ type SolutionResult struct {
 
 func (x *SolutionResult) Reset() {
 	*x = SolutionResult{}
-	mi := &file_proto_detection_proto_msgTypes[12]
+	mi := &file_proto_detection_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -945,7 +1099,7 @@ func (x *SolutionResult) String() string {
 func (*SolutionResult) ProtoMessage() {}
 
 func (x *SolutionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[12]
+	mi := &file_proto_detection_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -958,7 +1112,7 @@ func (x *SolutionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SolutionResult.ProtoReflect.Descriptor instead.
 func (*SolutionResult) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{12}
+	return file_proto_detection_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SolutionResult) GetViolationDetected() bool {
@@ -1076,7 +1230,7 @@ type ColorResult struct {
 
 func (x *ColorResult) Reset() {
 	*x = ColorResult{}
-	mi := &file_proto_detection_proto_msgTypes[13]
+	mi := &file_proto_detection_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1088,7 +1242,7 @@ func (x *ColorResult) String() string {
 func (*ColorResult) ProtoMessage() {}
 
 func (x *ColorResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[13]
+	mi := &file_proto_detection_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1101,7 +1255,7 @@ func (x *ColorResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ColorResult.ProtoReflect.Descriptor instead.
 func (*ColorResult) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{13}
+	return file_proto_detection_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ColorResult) GetColor() string {
@@ -1133,7 +1287,7 @@ type StatusResponse struct {
 
 func (x *StatusResponse) Reset() {
 	*x = StatusResponse{}
-	mi := &file_proto_detection_proto_msgTypes[14]
+	mi := &file_proto_detection_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1145,7 +1299,7 @@ func (x *StatusResponse) String() string {
 func (*StatusResponse) ProtoMessage() {}
 
 func (x *StatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[14]
+	mi := &file_proto_detection_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1158,7 +1312,7 @@ func (x *StatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusResponse.ProtoReflect.Descriptor instead.
 func (*StatusResponse) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{14}
+	return file_proto_detection_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *StatusResponse) GetStatus() string {
@@ -1206,7 +1360,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_proto_detection_proto_msgTypes[15]
+	mi := &file_proto_detection_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1218,7 +1372,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[15]
+	mi := &file_proto_detection_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1231,7 +1385,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{15}
+	return file_proto_detection_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *HealthResponse) GetStatus() string {
@@ -1252,7 +1406,7 @@ type PipelinesResponse struct {
 
 func (x *PipelinesResponse) Reset() {
 	*x = PipelinesResponse{}
-	mi := &file_proto_detection_proto_msgTypes[16]
+	mi := &file_proto_detection_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1264,7 +1418,7 @@ func (x *PipelinesResponse) String() string {
 func (*PipelinesResponse) ProtoMessage() {}
 
 func (x *PipelinesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[16]
+	mi := &file_proto_detection_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1277,7 +1431,7 @@ func (x *PipelinesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PipelinesResponse.ProtoReflect.Descriptor instead.
 func (*PipelinesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{16}
+	return file_proto_detection_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *PipelinesResponse) GetActivePipelines() []string {
@@ -1306,7 +1460,7 @@ type AddFaceRequest struct {
 
 func (x *AddFaceRequest) Reset() {
 	*x = AddFaceRequest{}
-	mi := &file_proto_detection_proto_msgTypes[17]
+	mi := &file_proto_detection_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1318,7 +1472,7 @@ func (x *AddFaceRequest) String() string {
 func (*AddFaceRequest) ProtoMessage() {}
 
 func (x *AddFaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_detection_proto_msgTypes[17]
+	mi := &file_proto_detection_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1331,7 +1485,7 @@ func (x *AddFaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddFaceRequest.ProtoReflect.Descriptor instead.
 func (*AddFaceRequest) Descriptor() ([]byte, []int) {
-	return file_proto_detection_proto_rawDescGZIP(), []int{17}
+	return file_proto_detection_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *AddFaceRequest) GetCameraId() string {
@@ -1351,6 +1505,112 @@ func (x *AddFaceRequest) GetImageId() string {
 func (x *AddFaceRequest) GetImage() string {
 	if x != nil {
 		return x.Image
+	}
+	return ""
+}
+
+// Request message for toggling outlier detection
+type ToggleRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CameraId      string                 `protobuf:"bytes,1,opt,name=camera_id,json=cameraId,proto3" json:"camera_id,omitempty"`
+	Mode          string                 `protobuf:"bytes,2,opt,name=mode,proto3" json:"mode,omitempty"` // true to enable, false to disable
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToggleRequest) Reset() {
+	*x = ToggleRequest{}
+	mi := &file_proto_detection_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToggleRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToggleRequest) ProtoMessage() {}
+
+func (x *ToggleRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_detection_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToggleRequest.ProtoReflect.Descriptor instead.
+func (*ToggleRequest) Descriptor() ([]byte, []int) {
+	return file_proto_detection_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ToggleRequest) GetCameraId() string {
+	if x != nil {
+		return x.CameraId
+	}
+	return ""
+}
+
+func (x *ToggleRequest) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+// Response message for toggle operations
+type ToggleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToggleResponse) Reset() {
+	*x = ToggleResponse{}
+	mi := &file_proto_detection_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToggleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToggleResponse) ProtoMessage() {}
+
+func (x *ToggleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_detection_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToggleResponse.ProtoReflect.Descriptor instead.
+func (*ToggleResponse) Descriptor() ([]byte, []int) {
+	return file_proto_detection_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ToggleResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ToggleResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
 	}
 	return ""
 }
@@ -1380,7 +1640,20 @@ const file_proto_detection_proto_rawDesc = "" +
 	"\x06roi_id\x18\x02 \x01(\tR\x05roiId\x12!\n" +
 	"\fproject_name\x18\x03 \x01(\tR\vprojectName\x12\x1d\n" +
 	"\n" +
-	"model_name\x18\x04 \x01(\tR\tmodelName\"\x1f\n" +
+	"model_name\x18\x04 \x01(\tR\tmodelName\"\x8d\x01\n" +
+	"\x14TrueDetectionRequest\x12\x1b\n" +
+	"\tcamera_id\x18\x01 \x01(\tR\bcameraId\x12\x14\n" +
+	"\x05image\x18\x02 \x01(\tR\x05image\x12!\n" +
+	"\fproject_name\x18\x03 \x01(\tR\vprojectName\x12\x1f\n" +
+	"\vobject_type\x18\x04 \x01(\tR\n" +
+	"objectType\"\xb6\x01\n" +
+	"\x1aRemoveTrueDetectionRequest\x12\x1b\n" +
+	"\tcamera_id\x18\x01 \x01(\tR\bcameraId\x12!\n" +
+	"\fproject_name\x18\x02 \x01(\tR\vprojectName\x12\x1f\n" +
+	"\vobject_type\x18\x03 \x01(\tR\n" +
+	"objectType\x12&\n" +
+	"\fdetection_id\x18\x04 \x01(\tH\x00R\vdetectionId\x88\x01\x01B\x0f\n" +
+	"\r_detection_id\"\x1f\n" +
 	"\x05point\x12\x16\n" +
 	"\x06values\x18\x01 \x03(\x02R\x06values\"\xa4\x01\n" +
 	"\x12SolutionROIRequest\x12\x1b\n" +
@@ -1400,7 +1673,7 @@ const file_proto_detection_proto_rawDesc = "" +
 	"\tsolutions\x18\x04 \x03(\v2+.detection.ProjectDetections.SolutionsEntryR\tsolutions\x1aW\n" +
 	"\x0eSolutionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12/\n" +
-	"\x05value\x18\x02 \x01(\v2\x19.detection.SolutionResultR\x05value:\x028\x01\"\xd9\b\n" +
+	"\x05value\x18\x02 \x01(\v2\x19.detection.SolutionResultR\x05value:\x028\x01\"\xab\t\n" +
 	"\tDetection\x12\x12\n" +
 	"\x04bbox\x18\x01 \x03(\x02R\x04bbox\x12\x1e\n" +
 	"\n" +
@@ -1414,34 +1687,37 @@ const file_proto_detection_proto_rawDesc = "" +
 	"\x0efalse_match_id\x18\a \x01(\tR\ffalseMatchId\x12\x1d\n" +
 	"\n" +
 	"send_alert\x18\b \x01(\bR\tsendAlert\x12\x1b\n" +
-	"\tframe_num\x18\t \x01(\x05R\bframeNum\x12\x1e\n" +
+	"\tframe_num\x18\t \x01(\x05R\bframeNum\x12\x15\n" +
+	"\x06is_rpn\x18\x1b \x01(\bR\x05isRpn\x12'\n" +
+	"\rtrue_match_id\x18\x1c \x01(\tH\x00R\vtrueMatchId\x88\x01\x01\x12\x1e\n" +
 	"\bhas_vest\x18\n" +
-	" \x01(\bH\x00R\ahasVest\x88\x01\x01\x12\"\n" +
+	" \x01(\bH\x01R\ahasVest\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"has_helmet\x18\v \x01(\bH\x01R\thasHelmet\x88\x01\x01\x12\x1e\n" +
-	"\bhas_head\x18\x1a \x01(\bH\x02R\ahasHead\x88\x01\x01\x12#\n" +
+	"has_helmet\x18\v \x01(\bH\x02R\thasHelmet\x88\x01\x01\x12\x1e\n" +
+	"\bhas_head\x18\x1a \x01(\bH\x03R\ahasHead\x88\x01\x01\x12#\n" +
 	"\n" +
-	"compliance\x18\f \x01(\tH\x03R\n" +
+	"compliance\x18\f \x01(\tH\x04R\n" +
 	"compliance\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"has_gloves\x18\r \x01(\bH\x04R\thasGloves\x88\x01\x01\x12$\n" +
-	"\vhas_glasses\x18\x0e \x01(\bH\x05R\n" +
+	"has_gloves\x18\r \x01(\bH\x05R\thasGloves\x88\x01\x01\x12$\n" +
+	"\vhas_glasses\x18\x0e \x01(\bH\x06R\n" +
 	"hasGlasses\x88\x01\x01\x12\x1e\n" +
 	"\n" +
 	"violations\x18\x0f \x03(\tR\n" +
 	"violations\x12\x1b\n" +
 	"\tppe_items\x18\x10 \x03(\tR\bppeItems\x12&\n" +
-	"\fis_intrusion\x18\x11 \x01(\bH\x06R\visIntrusion\x88\x01\x01\x12\x19\n" +
-	"\x05plate\x18\x12 \x01(\tH\aR\x05plate\x88\x01\x01\x12\x19\n" +
-	"\x05color\x18\x13 \x01(\tH\bR\x05color\x88\x01\x01\x12\x1b\n" +
-	"\x06gender\x18\x14 \x01(\tH\tR\x06gender\x88\x01\x01\x12&\n" +
-	"\fis_loitering\x18\x15 \x01(\bH\n" +
-	"R\visLoitering\x88\x01\x01\x12)\n" +
-	"\x0etime_in_region\x18\x16 \x01(\x02H\vR\ftimeInRegion\x88\x01\x01\x12$\n" +
-	"\vvessel_type\x18\x17 \x01(\tH\fR\n" +
+	"\fis_intrusion\x18\x11 \x01(\bH\aR\visIntrusion\x88\x01\x01\x12\x19\n" +
+	"\x05plate\x18\x12 \x01(\tH\bR\x05plate\x88\x01\x01\x12\x19\n" +
+	"\x05color\x18\x13 \x01(\tH\tR\x05color\x88\x01\x01\x12\x1b\n" +
+	"\x06gender\x18\x14 \x01(\tH\n" +
+	"R\x06gender\x88\x01\x01\x12&\n" +
+	"\fis_loitering\x18\x15 \x01(\bH\vR\visLoitering\x88\x01\x01\x12)\n" +
+	"\x0etime_in_region\x18\x16 \x01(\x02H\fR\ftimeInRegion\x88\x01\x01\x12$\n" +
+	"\vvessel_type\x18\x17 \x01(\tH\rR\n" +
 	"vesselType\x88\x01\x01\x12*\n" +
-	"\x0erecognition_id\x18\x18 \x01(\x05H\rR\rrecognitionId\x88\x01\x01\x120\n" +
-	"\x11recognition_score\x18\x19 \x01(\x02H\x0eR\x10recognitionScore\x88\x01\x01B\v\n" +
+	"\x0erecognition_id\x18\x18 \x01(\tH\x0eR\rrecognitionId\x88\x01\x01\x120\n" +
+	"\x11recognition_score\x18\x19 \x01(\x02H\x0fR\x10recognitionScore\x88\x01\x01B\x10\n" +
+	"\x0e_true_match_idB\v\n" +
 	"\t_has_vestB\r\n" +
 	"\v_has_helmetB\v\n" +
 	"\t_has_headB\r\n" +
@@ -1514,17 +1790,26 @@ const file_proto_detection_proto_rawDesc = "" +
 	"\x0eAddFaceRequest\x12\x1b\n" +
 	"\tcamera_id\x18\x01 \x01(\tR\bcameraId\x12\x19\n" +
 	"\bimage_id\x18\x02 \x01(\tR\aimageId\x12\x14\n" +
-	"\x05image\x18\x03 \x01(\tR\x05image2\x99\x05\n" +
+	"\x05image\x18\x03 \x01(\tR\x05image\"@\n" +
+	"\rToggleRequest\x12\x1b\n" +
+	"\tcamera_id\x18\x01 \x01(\tR\bcameraId\x12\x12\n" +
+	"\x04mode\x18\x02 \x01(\tR\x04mode\"B\n" +
+	"\x0eToggleResponse\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage2\xc7\x06\n" +
 	"\x10DetectionService\x12I\n" +
 	"\x0eInferDetection\x12\x17.detection.FrameRequest\x1a\x1c.detection.DetectionResponse\"\x00\x12H\n" +
 	"\x12SaveFalseDetection\x12\x15.detection.ROIRequest\x1a\x19.detection.StatusResponse\"\x00\x12P\n" +
-	"\x14RemoveFalseDetection\x12\x1b.detection.RemoveROIRequest\x1a\x19.detection.StatusResponse\"\x00\x12<\n" +
+	"\x14RemoveFalseDetection\x12\x1b.detection.RemoveROIRequest\x1a\x19.detection.StatusResponse\"\x00\x12Q\n" +
+	"\x11SaveTrueDetection\x12\x1f.detection.TrueDetectionRequest\x1a\x19.detection.StatusResponse\"\x00\x12Y\n" +
+	"\x13RemoveTrueDetection\x12%.detection.RemoveTrueDetectionRequest\x1a\x19.detection.StatusResponse\"\x00\x12C\n" +
+	"\n" +
+	"ToggleMode\x12\x18.detection.ToggleRequest\x1a\x19.detection.ToggleResponse\"\x00\x12<\n" +
 	"\vHealthCheck\x12\x10.detection.Empty\x1a\x19.detection.HealthResponse\"\x00\x12F\n" +
 	"\x12GetActivePipelines\x12\x10.detection.Empty\x1a\x1c.detection.PipelinesResponse\"\x00\x12J\n" +
 	"\x0fRemovePipelines\x12\x1a.detection.CameraIdRequest\x1a\x19.detection.StatusResponse\"\x00\x12D\n" +
-	"\x06SetROI\x12\x1d.detection.SolutionROIRequest\x1a\x19.detection.StatusResponse\"\x00\x12C\n" +
-	"\rInitializeROI\x12\x15.detection.ROIRequest\x1a\x19.detection.StatusResponse\"\x00\x12A\n" +
-	"\aAddFace\x12\x19.detection.AddFaceRequest\x1a\x19.detection.StatusResponse\"\x00B\x1dZ\x1bkepler-worker/pkg/detectionb\x06proto3"
+	"\x06SetROI\x12\x1d.detection.SolutionROIRequest\x1a\x19.detection.StatusResponse\"\x00\x12A\n" +
+	"\aAddFace\x12\x19.detection.AddFaceRequest\x1a\x19.detection.StatusResponse\"\x00B\x18Z\x16kepler-worker-go/protob\x06proto3"
 
 var (
 	file_proto_detection_proto_rawDescOnce sync.Once
@@ -1538,63 +1823,71 @@ func file_proto_detection_proto_rawDescGZIP() []byte {
 	return file_proto_detection_proto_rawDescData
 }
 
-var file_proto_detection_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_proto_detection_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_proto_detection_proto_goTypes = []any{
-	(*Empty)(nil),                // 0: detection.Empty
-	(*CameraIdRequest)(nil),      // 1: detection.CameraIdRequest
-	(*FrameRequest)(nil),         // 2: detection.FrameRequest
-	(*ROIRequest)(nil),           // 3: detection.ROIRequest
-	(*RemoveROIRequest)(nil),     // 4: detection.RemoveROIRequest
-	(*Point)(nil),                // 5: detection.point
-	(*SolutionROIRequest)(nil),   // 6: detection.SolutionROIRequest
-	(*DetectionResponse)(nil),    // 7: detection.DetectionResponse
-	(*ProjectDetections)(nil),    // 8: detection.ProjectDetections
-	(*Detection)(nil),            // 9: detection.Detection
-	(*CrowdInfo)(nil),            // 10: detection.CrowdInfo
-	(*CrowdDetectionResult)(nil), // 11: detection.CrowdDetectionResult
-	(*SolutionResult)(nil),       // 12: detection.SolutionResult
-	(*ColorResult)(nil),          // 13: detection.ColorResult
-	(*StatusResponse)(nil),       // 14: detection.StatusResponse
-	(*HealthResponse)(nil),       // 15: detection.HealthResponse
-	(*PipelinesResponse)(nil),    // 16: detection.PipelinesResponse
-	(*AddFaceRequest)(nil),       // 17: detection.AddFaceRequest
-	nil,                          // 18: detection.DetectionResponse.ResultsEntry
-	nil,                          // 19: detection.ProjectDetections.SolutionsEntry
-	nil,                          // 20: detection.SolutionResult.ValidatedPlatesEntry
+	(*Empty)(nil),                      // 0: detection.Empty
+	(*CameraIdRequest)(nil),            // 1: detection.CameraIdRequest
+	(*FrameRequest)(nil),               // 2: detection.FrameRequest
+	(*ROIRequest)(nil),                 // 3: detection.ROIRequest
+	(*RemoveROIRequest)(nil),           // 4: detection.RemoveROIRequest
+	(*TrueDetectionRequest)(nil),       // 5: detection.TrueDetectionRequest
+	(*RemoveTrueDetectionRequest)(nil), // 6: detection.RemoveTrueDetectionRequest
+	(*Point)(nil),                      // 7: detection.point
+	(*SolutionROIRequest)(nil),         // 8: detection.SolutionROIRequest
+	(*DetectionResponse)(nil),          // 9: detection.DetectionResponse
+	(*ProjectDetections)(nil),          // 10: detection.ProjectDetections
+	(*Detection)(nil),                  // 11: detection.Detection
+	(*CrowdInfo)(nil),                  // 12: detection.CrowdInfo
+	(*CrowdDetectionResult)(nil),       // 13: detection.CrowdDetectionResult
+	(*SolutionResult)(nil),             // 14: detection.SolutionResult
+	(*ColorResult)(nil),                // 15: detection.ColorResult
+	(*StatusResponse)(nil),             // 16: detection.StatusResponse
+	(*HealthResponse)(nil),             // 17: detection.HealthResponse
+	(*PipelinesResponse)(nil),          // 18: detection.PipelinesResponse
+	(*AddFaceRequest)(nil),             // 19: detection.AddFaceRequest
+	(*ToggleRequest)(nil),              // 20: detection.ToggleRequest
+	(*ToggleResponse)(nil),             // 21: detection.ToggleResponse
+	nil,                                // 22: detection.DetectionResponse.ResultsEntry
+	nil,                                // 23: detection.ProjectDetections.SolutionsEntry
+	nil,                                // 24: detection.SolutionResult.ValidatedPlatesEntry
 }
 var file_proto_detection_proto_depIdxs = []int32{
-	5,  // 0: detection.SolutionROIRequest.roi_pts:type_name -> detection.point
-	18, // 1: detection.DetectionResponse.results:type_name -> detection.DetectionResponse.ResultsEntry
-	9,  // 2: detection.ProjectDetections.primary_detections:type_name -> detection.Detection
-	9,  // 3: detection.ProjectDetections.secondary_detections:type_name -> detection.Detection
-	9,  // 4: detection.ProjectDetections.tertiary_detections:type_name -> detection.Detection
-	19, // 5: detection.ProjectDetections.solutions:type_name -> detection.ProjectDetections.SolutionsEntry
-	10, // 6: detection.CrowdDetectionResult.crowds:type_name -> detection.CrowdInfo
-	20, // 7: detection.SolutionResult.validated_plates:type_name -> detection.SolutionResult.ValidatedPlatesEntry
-	13, // 8: detection.SolutionResult.clothing_colors:type_name -> detection.ColorResult
-	11, // 9: detection.SolutionResult.crowd_detection:type_name -> detection.CrowdDetectionResult
-	8,  // 10: detection.DetectionResponse.ResultsEntry.value:type_name -> detection.ProjectDetections
-	12, // 11: detection.ProjectDetections.SolutionsEntry.value:type_name -> detection.SolutionResult
+	7,  // 0: detection.SolutionROIRequest.roi_pts:type_name -> detection.point
+	22, // 1: detection.DetectionResponse.results:type_name -> detection.DetectionResponse.ResultsEntry
+	11, // 2: detection.ProjectDetections.primary_detections:type_name -> detection.Detection
+	11, // 3: detection.ProjectDetections.secondary_detections:type_name -> detection.Detection
+	11, // 4: detection.ProjectDetections.tertiary_detections:type_name -> detection.Detection
+	23, // 5: detection.ProjectDetections.solutions:type_name -> detection.ProjectDetections.SolutionsEntry
+	12, // 6: detection.CrowdDetectionResult.crowds:type_name -> detection.CrowdInfo
+	24, // 7: detection.SolutionResult.validated_plates:type_name -> detection.SolutionResult.ValidatedPlatesEntry
+	15, // 8: detection.SolutionResult.clothing_colors:type_name -> detection.ColorResult
+	13, // 9: detection.SolutionResult.crowd_detection:type_name -> detection.CrowdDetectionResult
+	10, // 10: detection.DetectionResponse.ResultsEntry.value:type_name -> detection.ProjectDetections
+	14, // 11: detection.ProjectDetections.SolutionsEntry.value:type_name -> detection.SolutionResult
 	2,  // 12: detection.DetectionService.InferDetection:input_type -> detection.FrameRequest
 	3,  // 13: detection.DetectionService.SaveFalseDetection:input_type -> detection.ROIRequest
 	4,  // 14: detection.DetectionService.RemoveFalseDetection:input_type -> detection.RemoveROIRequest
-	0,  // 15: detection.DetectionService.HealthCheck:input_type -> detection.Empty
-	0,  // 16: detection.DetectionService.GetActivePipelines:input_type -> detection.Empty
-	1,  // 17: detection.DetectionService.RemovePipelines:input_type -> detection.CameraIdRequest
-	6,  // 18: detection.DetectionService.SetROI:input_type -> detection.SolutionROIRequest
-	3,  // 19: detection.DetectionService.InitializeROI:input_type -> detection.ROIRequest
-	17, // 20: detection.DetectionService.AddFace:input_type -> detection.AddFaceRequest
-	7,  // 21: detection.DetectionService.InferDetection:output_type -> detection.DetectionResponse
-	14, // 22: detection.DetectionService.SaveFalseDetection:output_type -> detection.StatusResponse
-	14, // 23: detection.DetectionService.RemoveFalseDetection:output_type -> detection.StatusResponse
-	15, // 24: detection.DetectionService.HealthCheck:output_type -> detection.HealthResponse
-	16, // 25: detection.DetectionService.GetActivePipelines:output_type -> detection.PipelinesResponse
-	14, // 26: detection.DetectionService.RemovePipelines:output_type -> detection.StatusResponse
-	14, // 27: detection.DetectionService.SetROI:output_type -> detection.StatusResponse
-	14, // 28: detection.DetectionService.InitializeROI:output_type -> detection.StatusResponse
-	14, // 29: detection.DetectionService.AddFace:output_type -> detection.StatusResponse
-	21, // [21:30] is the sub-list for method output_type
-	12, // [12:21] is the sub-list for method input_type
+	5,  // 15: detection.DetectionService.SaveTrueDetection:input_type -> detection.TrueDetectionRequest
+	6,  // 16: detection.DetectionService.RemoveTrueDetection:input_type -> detection.RemoveTrueDetectionRequest
+	20, // 17: detection.DetectionService.ToggleMode:input_type -> detection.ToggleRequest
+	0,  // 18: detection.DetectionService.HealthCheck:input_type -> detection.Empty
+	0,  // 19: detection.DetectionService.GetActivePipelines:input_type -> detection.Empty
+	1,  // 20: detection.DetectionService.RemovePipelines:input_type -> detection.CameraIdRequest
+	8,  // 21: detection.DetectionService.SetROI:input_type -> detection.SolutionROIRequest
+	19, // 22: detection.DetectionService.AddFace:input_type -> detection.AddFaceRequest
+	9,  // 23: detection.DetectionService.InferDetection:output_type -> detection.DetectionResponse
+	16, // 24: detection.DetectionService.SaveFalseDetection:output_type -> detection.StatusResponse
+	16, // 25: detection.DetectionService.RemoveFalseDetection:output_type -> detection.StatusResponse
+	16, // 26: detection.DetectionService.SaveTrueDetection:output_type -> detection.StatusResponse
+	16, // 27: detection.DetectionService.RemoveTrueDetection:output_type -> detection.StatusResponse
+	21, // 28: detection.DetectionService.ToggleMode:output_type -> detection.ToggleResponse
+	17, // 29: detection.DetectionService.HealthCheck:output_type -> detection.HealthResponse
+	18, // 30: detection.DetectionService.GetActivePipelines:output_type -> detection.PipelinesResponse
+	16, // 31: detection.DetectionService.RemovePipelines:output_type -> detection.StatusResponse
+	16, // 32: detection.DetectionService.SetROI:output_type -> detection.StatusResponse
+	16, // 33: detection.DetectionService.AddFace:output_type -> detection.StatusResponse
+	23, // [23:34] is the sub-list for method output_type
+	12, // [12:23] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -1605,15 +1898,16 @@ func file_proto_detection_proto_init() {
 	if File_proto_detection_proto != nil {
 		return
 	}
-	file_proto_detection_proto_msgTypes[9].OneofWrappers = []any{}
-	file_proto_detection_proto_msgTypes[12].OneofWrappers = []any{}
+	file_proto_detection_proto_msgTypes[6].OneofWrappers = []any{}
+	file_proto_detection_proto_msgTypes[11].OneofWrappers = []any{}
+	file_proto_detection_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_detection_proto_rawDesc), len(file_proto_detection_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   21,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

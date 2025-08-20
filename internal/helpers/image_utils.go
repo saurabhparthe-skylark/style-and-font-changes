@@ -555,6 +555,13 @@ func AddDetectionImage(payload interface{}, detection models.Detection, frame []
 		return
 	}
 
+	log.Debug().
+		Str("camera_id", cameraID).
+		Str("identifier", identifier).
+		Int("frame_size", len(frame)).
+		Int("detection_image_size", len(detection.BBox)).
+		Msg("📸 Adding detection image")
+
 	// Validate detection bounding box
 	if len(detection.BBox) != 4 {
 		log.Warn().
@@ -609,9 +616,10 @@ func AddDetectionImage(payload interface{}, detection models.Detection, frame []
 
 	// Create base detection metadata
 	metadata := map[string]interface{}{
-		"track_id":     detection.TrackID,
-		"class_name":   detection.ClassName,
-		"project_name": detection.ProjectName,
+		"track_id":        detection.TrackID,
+		"class_name":      detection.ClassName,
+		"project_name":    detection.ProjectName,
+		"detection_level": detection.DetectionLevel,
 	}
 
 	// Add extra metadata
@@ -629,9 +637,9 @@ func AddDetectionImage(payload interface{}, detection models.Detection, frame []
 	// Handle both AlertPayload and SuppressionPayload
 	switch p := payload.(type) {
 	case *models.AlertPayload:
-		p.DetectionImages = []models.DetectionImage{detectionImage}
+		p.DetectionImages = append(p.DetectionImages, detectionImage)
 	case *models.SuppressionPayload:
-		p.DetectionImages = []models.DetectionImage{detectionImage}
+		p.DetectionImages = append(p.DetectionImages, detectionImage)
 	}
 
 	log.Debug().
@@ -651,9 +659,10 @@ func CreateDetectionRecord(detection models.Detection) models.DetectionRecord {
 		FrameTimestamp:        detection.Timestamp,
 		DetectionCountInFrame: 1, // Will be updated by service
 		Metadata: map[string]interface{}{
-			"bbox":         detection.BBox,
-			"class_name":   detection.ClassName,
-			"project_name": detection.ProjectName,
+			"bbox":            detection.BBox,
+			"class_name":      detection.ClassName,
+			"project_name":    detection.ProjectName,
+			"detection_level": detection.DetectionLevel,
 		},
 	}
 }
@@ -668,9 +677,10 @@ func CreateSuppressionRecord(detection models.Detection, suppressionType models.
 		FrameTimestamp:  detection.Timestamp,
 		Timestamp:       detection.Timestamp, // You might want to use time.Now() here
 		Metadata: map[string]interface{}{
-			"bbox":         detection.BBox,
-			"class_name":   detection.ClassName,
-			"project_name": detection.ProjectName,
+			"bbox":            detection.BBox,
+			"class_name":      detection.ClassName,
+			"project_name":    detection.ProjectName,
+			"detection_level": detection.DetectionLevel,
 		},
 	}
 

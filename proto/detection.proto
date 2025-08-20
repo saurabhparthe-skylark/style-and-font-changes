@@ -1,8 +1,7 @@
 syntax = "proto3";
-
 package detection;
 
-option go_package = "kepler-worker/pkg/detection";
+option go_package = "kepler-worker-go/proto";
 
 service DetectionService {
   // Process frame for object detection across multiple projects
@@ -10,10 +9,14 @@ service DetectionService {
   
   // Save false detection data
   rpc SaveFalseDetection (ROIRequest) returns (StatusResponse) {}
-
   // Remove false detection data
   rpc RemoveFalseDetection (RemoveROIRequest) returns (StatusResponse) {}
-
+  // Save true detection data to True Bucket
+  rpc SaveTrueDetection (TrueDetectionRequest) returns (StatusResponse) {}
+  // Remove true detection data from True Bucket
+  rpc RemoveTrueDetection (RemoveTrueDetectionRequest) returns (StatusResponse) {}
+  // Toggle outlier detection mode in true_bucket_rpn
+  rpc ToggleMode (ToggleRequest) returns (ToggleResponse) {}
   // Health check endpoint
   rpc HealthCheck (Empty) returns (HealthResponse) {}
   
@@ -22,41 +25,32 @@ service DetectionService {
   
   // Remove pipelines for a camera
   rpc RemovePipelines (CameraIdRequest) returns (StatusResponse) {}
-
   // Set ROI for a solution
   rpc SetROI (SolutionROIRequest) returns (StatusResponse) {}
-  
-  // Initialize ROI for camera startup or ROI updates (send once, not every frame)
-  rpc InitializeROI (ROIRequest) returns (StatusResponse) {}
   
   // Add a face to the face embeddings database (for face_detection_sr project)
   rpc AddFace (AddFaceRequest) returns (StatusResponse) {}
 }
-
 // Empty message for requests that don't need parameters
 message Empty {}
-
 // Request message containing camera ID
 message CameraIdRequest {
   string camera_id = 1;
 }
-
 // Request message for frame processing
 message FrameRequest {
-  bytes image = 1;       // Base64 encoded image
+  bytes image = 1;       // Encoded image bytes (e.g., JPEG/PNG)
   string camera_id = 2;
   repeated string project_names = 3;
 }
-
 // Request message for saving false detections
 message ROIRequest {
   string image = 1;       // Base64 encoded image
   string camera_id = 2;
   string roi_id = 3;
   string project_name = 4;
-  string model_name = 5;  // Use "ppe_detection" for PPE model
+  string model_name = 5;
 }
-
 // Request message for remove false detections
 message RemoveROIRequest {
   string camera_id = 1;
@@ -64,11 +58,23 @@ message RemoveROIRequest {
   string project_name = 3;
   string model_name = 4;
 }
-
+// Request message for saving true detections to True Bucket
+message TrueDetectionRequest {
+  string camera_id = 1;
+  string image = 2;       // Base64 encoded image
+  string project_name = 3;
+  string object_type = 4;  // e.g., "Car", "Truck", "Person", etc.
+}
+// Request message for removing true detections from True Bucket
+message RemoveTrueDetectionRequest {
+  string camera_id = 1;
+  string project_name = 2;
+  string object_type = 3;  // e.g., "Car", "Truck", "Person", etc.
+  optional string detection_id = 4;  // Optional: if provided, removes specific detection; if not provided, removes all for object_type
+}
 message point {
     repeated float values = 1; // This represents List[int]
 }
-
 // Request message to set ROI 
 message SolutionROIRequest {
   string camera_id = 1;
@@ -76,12 +82,10 @@ message SolutionROIRequest {
   string solution_name = 3;
   repeated point roi_pts = 4;
 }
-
 // Response message for detection results
 message DetectionResponse {
   map<string, ProjectDetections> results = 1;
 }
-
 // Container for detection results per project
 message ProjectDetections {
   repeated Detection primary_detections = 1;
@@ -89,7 +93,6 @@ message ProjectDetections {
   repeated Detection tertiary_detections = 3;
   map<string, SolutionResult> solutions = 4;
 }
-
 // Single detection result
 message Detection {
   repeated float bbox = 1;       // [x1, y1, x2, y2]
@@ -101,7 +104,8 @@ message Detection {
   string false_match_id = 7;
   bool send_alert = 8;
   int32 frame_num = 9;
-
+  bool is_rpn = 27;
+  optional string true_match_id = 28;
   // PPE Alerts (optional fields)
   optional bool has_vest = 10;
   optional bool has_helmet = 11;
@@ -111,79 +115,61 @@ message Detection {
   optional bool has_glasses = 14;
   repeated string violations = 15;
   repeated string ppe_items = 16;
-
   // Intrusion Alerts
   optional bool is_intrusion = 17; 
-
   // Numberplate Recognition
   optional string plate = 18;
-
   // Cloth Color Detection
   optional string color = 19;
-
   // Gender Classification 
   optional string gender = 20;
-
   // Loitering Detection
   optional bool is_loitering = 21;
   optional float time_in_region = 22;
-
   // vessel Classification
   optional string vessel_type = 23;
-
   // face Recognition
-  optional int32 recognition_id = 24;
+  optional string recognition_id = 24;
   optional float recognition_score = 25;
 }
-
 message CrowdInfo {
   repeated float rectangle = 1; // [x1, y1, x2, y2]
   int32 count = 2;
   string alert_level = 3; // "low", "medium", "high"
 }
-
 message CrowdDetectionResult {
   repeated CrowdInfo crowds = 1;
   int32 total_crowd_people = 2;
 }
-
 // Solution result
 message SolutionResult {
   // PPE Alerts
   optional bool violation_detected = 1;
   optional float last_violation_time = 2;
   repeated string current_violations = 3;
-
   // People Counter 
   repeated int32 in_region_tracks = 4;
   optional int32 current_count = 5;
   optional int32 out_region_count = 16;
   optional int32 total_count = 6;
   optional int32 max_count = 7;
-
   // Intrusion Detection
   optional bool intrusion_detected = 8;
   optional float last_intrusion_time = 9;
   repeated int32 intruder_tracks = 10;
-
   // Numberplate Recognition
   map<int32, string> validated_plates = 11;
-
   // Cloth Color Detection
   repeated ColorResult clothing_colors = 12;
-
   // Crowd Detection
   optional CrowdDetectionResult crowd_detection = 13;
-
   // Loitering Detection
   optional bool loitering_detected = 15;
 }
-
 message ColorResult{
   string color = 1;
   int32 track_id = 2;
 }
-
 // Response message for status endpoints
 message StatusResponse {
   string status = 1;
@@ -193,21 +179,28 @@ message StatusResponse {
   int32 pipelines_removed = 4;
   int32 remaining_pipelines = 5;
 }
-
 // Response message for health check
 message HealthResponse {
   string status = 1;
 }
-
 // Response message for active pipelines
 message PipelinesResponse {
   repeated string active_pipelines = 1;
   int32 count = 2;
 }
-
 // Request message for adding a face to the database
 message AddFaceRequest {
   string camera_id = 1;
   string image_id = 2;   // Unique ID for the image/face
   string image = 3;      // Base64 encoded image
+}
+// Request message for toggling outlier detection
+message ToggleRequest {
+  string camera_id = 1;
+  string mode = 2;  // true to enable, false to disable
+}
+// Response message for toggle operations
+message ToggleResponse {
+  string status = 1;
+  string message = 2;
 }
