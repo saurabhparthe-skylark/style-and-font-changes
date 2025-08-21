@@ -85,7 +85,7 @@ func BuildGeneralAlert(detection models.Detection, cameraID string, frame []byte
 }
 
 // BuildConsolidatedGeneralAlert creates a consolidated general alert for multiple detections
-func BuildConsolidatedGeneralAlert(detections []models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildConsolidatedGeneralAlert(detections []models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 	if len(detections) == 0 {
 		log.Warn().Str("camera_id", cameraID).Msg("No detections provided for consolidated general alert")
 		return models.AlertPayload{}
@@ -137,12 +137,12 @@ func BuildConsolidatedGeneralAlert(detections []models.Detection, cameraID strin
 		Metadata: decision.Metadata,
 	}
 
-	// Add context image
-	helpers.AddContextImage(&payload, frame, cameraID, primaryDetection.TrackID, "Consolidated general alert")
+	// Add context image using annotated frame (shows full scene with overlays)
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, primaryDetection.TrackID, "Consolidated general alert")
 
-	// Add detection images for ALL detections
+	// Add detection images for ALL detections using raw frame (clean crops without overlays)
 	for i, detection := range detections {
-		helpers.AddDetectionImage(&payload, detection, frame, cameraID,
+		helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID,
 			fmt.Sprintf("general_consolidated_%d_%d", detection.TrackID, i),
 			map[string]interface{}{
 				"alert_type":       decision.AlertType,

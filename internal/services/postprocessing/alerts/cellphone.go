@@ -81,8 +81,8 @@ func BuildCellphoneAlert(detection models.Detection, cameraID string, frame []by
 }
 
 // BuildConsolidatedCellphoneAlert creates a consolidated cellphone alert for multiple detections
-func BuildConsolidatedCellphoneAlert(detections []models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildConsolidatedCellphoneAlert(detections []models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 	// For now, delegate to general consolidated alert builder
 	// TODO: Implement cellphone-specific consolidated logic
-	return BuildConsolidatedGeneralAlert(detections, cameraID, frame)
+	return BuildConsolidatedGeneralAlert(detections, cameraID, rawFrame, annotatedFrame)
 }

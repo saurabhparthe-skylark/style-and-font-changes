@@ -12,6 +12,7 @@ import (
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
 	"kepler-worker-go/internal/services/postprocessing"
+	"kepler-worker-go/internal/services/publisher"
 	"kepler-worker-go/internal/services/recorder"
 )
 
@@ -24,7 +25,8 @@ type CameraManager struct {
 
 	// Pipeline components
 	frameProcessor *FrameProcessor
-	publisher      *Publisher
+	publisher      *Publisher         // MJPEG publisher
+	publisherSvc   *publisher.Service // MediaMTX publisher service
 	streamCapture  *StreamCapture
 	recorder       *recorder.Service
 
@@ -38,16 +40,16 @@ type CameraManager struct {
 }
 
 // NewCameraManager creates a new camera manager with full pipeline
-func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service, recorderSvc *recorder.Service) (*CameraManager, error) {
+func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service, recorderSvc *recorder.Service, publisherSvc *publisher.Service) (*CameraManager, error) {
 	// Create pipeline components
 	frameProcessor, err := NewFrameProcessor(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create frame processor: %w", err)
 	}
 
-	publisher, err := NewPublisher(cfg)
+	mjpegPublisher, err := NewPublisher(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create publisher: %w", err)
+		return nil, fmt.Errorf("failed to create MJPEG publisher: %w", err)
 	}
 
 	streamCapture := NewStreamCapture(cfg)
@@ -56,7 +58,8 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 		cfg:                   cfg,
 		cameras:               make(map[string]*models.Camera),
 		frameProcessor:        frameProcessor,
-		publisher:             publisher,
+		publisher:             mjpegPublisher,
+		publisherSvc:          publisherSvc,
 		streamCapture:         streamCapture,
 		recorder:              recorderSvc,
 		stopChannel:           make(chan struct{}),
@@ -360,10 +363,18 @@ func (cm *CameraManager) runPublisher(camera *models.Camera) {
 		case <-camera.StopChannel:
 			return
 		case processedFrame := <-camera.ProcessedFrames:
+			// Publish to MJPEG
 			err := cm.publisher.PublishFrame(processedFrame)
 			if err != nil {
-				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish frame")
+				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish MJPEG frame")
 				camera.ErrorCount++
+			}
+
+			// Publish to MediaMTX via publisher service
+			err = cm.publisherSvc.PublishFrame(processedFrame)
+			if err != nil {
+				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish MediaMTX frame")
+				// Don't increment error count for MediaMTX failures as it's secondary
 			}
 		}
 	}
@@ -407,12 +418,13 @@ func (cm *CameraManager) runPostProcessor(camera *models.Camera) {
 					CameraID:    camera.ID,
 				}
 
-				// Use new detection-only processing with frame data for images
+				// Use new detection-only processing with both raw and annotated frame data
 				result := cm.postProcessingService.ProcessDetections(
 					camera.ID,
 					detections,
 					frameMetadata,
-					processedFrame.Data, // Pass frame data for context and detection images
+					processedFrame.RawData, // Raw frame data for clean crops
+					processedFrame.Data,    // Annotated frame data for context images
 				)
 
 				// Log processing results
@@ -502,6 +514,11 @@ func (cm *CameraManager) stopCameraInternal(camera *models.Camera) {
 	}
 
 	camera.IsActive = false
+
+	// Stop MediaMTX stream for this camera
+	if err := cm.publisherSvc.StopStream(camera.ID); err != nil {
+		log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to stop MediaMTX stream")
+	}
 
 	// Safely close all channels
 	cm.safeCloseStopChannel(camera.StopChannel, camera.ID)

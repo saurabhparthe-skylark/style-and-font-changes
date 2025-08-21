@@ -110,10 +110,10 @@ func BuildFireSmokeAlert(detection models.Detection, cameraID string, frame []by
 }
 
 // BuildConsolidatedFireSmokeAlert creates a consolidated fire/smoke alert for multiple detections
-func BuildConsolidatedFireSmokeAlert(detections []models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildConsolidatedFireSmokeAlert(detections []models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 	// For now, delegate to general consolidated alert builder
 	// TODO: Implement fire/smoke-specific consolidated logic
-	return BuildConsolidatedGeneralAlert(detections, cameraID, frame)
+	return BuildConsolidatedGeneralAlert(detections, cameraID, rawFrame, annotatedFrame)
 }
 
 // CreateFireSmokeTitle generates appropriate title for fire/smoke detections

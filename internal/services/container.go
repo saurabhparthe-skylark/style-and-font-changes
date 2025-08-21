@@ -8,6 +8,7 @@ import (
 	"kepler-worker-go/internal/services/camera"
 	"kepler-worker-go/internal/services/messaging"
 	"kepler-worker-go/internal/services/postprocessing"
+	"kepler-worker-go/internal/services/publisher"
 	"kepler-worker-go/internal/services/recorder"
 )
 
@@ -18,6 +19,7 @@ type ServiceContainer struct {
 	PostProcessingSvc *postprocessing.Service
 	MessageSvc        *messaging.Service
 	RecorderSvc       *recorder.Service
+	PublisherSvc      *publisher.Service
 }
 
 // NewServiceContainer creates a new service container
@@ -26,6 +28,12 @@ func NewServiceContainer(cfg *config.Config) (*ServiceContainer, error) {
 	messageSvc, err := messaging.NewService(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize messaging service: %w", err)
+	}
+
+	// Initialize publisher service (MediaMTX)
+	publisherSvc, err := publisher.NewWebRTCService(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize publisher service: %w", err)
 	}
 
 	// Initialize post-processing service with message publisher
@@ -38,7 +46,7 @@ func NewServiceContainer(cfg *config.Config) (*ServiceContainer, error) {
 	recorderSvc := recorder.NewService(cfg, messageSvc)
 
 	// Initialize camera manager
-	cameraManager, err := camera.NewCameraManager(cfg, postProcessingSvc, recorderSvc)
+	cameraManager, err := camera.NewCameraManager(cfg, postProcessingSvc, recorderSvc, publisherSvc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize camera manager: %w", err)
 	}
@@ -49,6 +57,7 @@ func NewServiceContainer(cfg *config.Config) (*ServiceContainer, error) {
 		PostProcessingSvc: postProcessingSvc,
 		MessageSvc:        messageSvc,
 		RecorderSvc:       recorderSvc,
+		PublisherSvc:      publisherSvc,
 	}, nil
 }
 
@@ -60,6 +69,12 @@ func (sc *ServiceContainer) Shutdown(ctx context.Context) error {
 	if sc.CameraManager != nil {
 		if err := sc.CameraManager.Shutdown(ctx); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("camera manager shutdown error: %w", err)
+		}
+	}
+
+	if sc.PublisherSvc != nil {
+		if err := sc.PublisherSvc.Shutdown(ctx); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("publisher service shutdown error: %w", err)
 		}
 	}
 

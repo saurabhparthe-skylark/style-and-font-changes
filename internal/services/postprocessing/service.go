@@ -64,7 +64,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 }
 
 // ProcessDetections processes detections for both alerts and suppressions
-func (s *Service) ProcessDetections(cameraID string, detections []models.Detection, frameMetadata models.FrameMetadata, frameData []byte) models.ProcessedDetections {
+func (s *Service) ProcessDetections(cameraID string, detections []models.Detection, frameMetadata models.FrameMetadata, rawFrameData []byte, annotatedFrameData []byte) models.ProcessedDetections {
 	result := models.ProcessedDetections{
 		TotalDetections: len(detections),
 		Errors:          make([]string, 0),
@@ -94,7 +94,7 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 			}
 
 			if s.CheckCooldown(suppressionKey, "suppression") {
-				s.processSuppressionDirectly(det, suppressionDecision, cameraID, frameData, frameMetadata)
+				s.processSuppressionDirectly(det, suppressionDecision, cameraID, rawFrameData, frameMetadata)
 				s.UpdateCooldown(suppressionKey, "suppression")
 				result.SuppressedDetections++
 			} else {
@@ -153,7 +153,7 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 		}
 
 		// Process consolidated alert with ALL detections of this type
-		if err := s.processConsolidatedAlert(typeDetections, decision, cameraID, frameData, frameMetadata); err != nil {
+		if err := s.processConsolidatedAlert(typeDetections, decision, cameraID, rawFrameData, annotatedFrameData, frameMetadata); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("Alert processing error for type %s: %v", typeKey, err))
 		} else {
 			s.UpdateCooldown(cooldownKey, decision.CooldownType)
@@ -242,7 +242,7 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 }
 
 // processConsolidatedAlert processes multiple detections into a single consolidated alert
-func (s *Service) processConsolidatedAlert(detections []models.Detection, decision models.AlertDecision, cameraID string, frameData []byte, frameMetadata models.FrameMetadata) error {
+func (s *Service) processConsolidatedAlert(detections []models.Detection, decision models.AlertDecision, cameraID string, rawFrameData []byte, annotatedFrameData []byte, frameMetadata models.FrameMetadata) error {
 	start := time.Now()
 
 	if len(detections) == 0 {
@@ -254,31 +254,31 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 
 	switch decision.AlertType {
 	case models.AlertTypePPEViolation:
-		payload = alerts.BuildConsolidatedPPEAlert(detections, cameraID, frameData)
+		payload = alerts.BuildConsolidatedPPEAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeCellphoneUsage:
-		payload = alerts.BuildConsolidatedCellphoneAlert(detections, cameraID, frameData)
+		payload = alerts.BuildConsolidatedCellphoneAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeDroneDetection:
-		payload = alerts.BuildConsolidatedDroneAlert(detections, cameraID, frameData)
+		payload = alerts.BuildConsolidatedDroneAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeFireSmoke:
-		payload = alerts.BuildConsolidatedFireSmokeAlert(detections, cameraID, frameData)
+		payload = alerts.BuildConsolidatedFireSmokeAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeAnomalyDetection:
-		payload = alerts.BuildConsolidatedAnomalyAlert(detections, cameraID, frameData)
+		payload = alerts.BuildConsolidatedAnomalyAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeSelfLearned:
-		payload = alerts.BuildConsolidatedSelfLearningAlert(detections, cameraID, frameData)
+		payload = alerts.BuildConsolidatedSelfLearningAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeHighConfidence:
-		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, frameData)
+		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	default:
 		log.Warn().
 			Str("alert_type", string(decision.AlertType)).
 			Msg("Unknown alert type, using general alert builder")
-		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, frameData)
+		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 	}
 
 	// Add processing metadata
@@ -350,7 +350,7 @@ func (s *Service) getDetectionLevelsSummary(detections []models.Detection) map[s
 }
 
 // processSuppressionDirectly processes a suppression immediately without workers
-func (s *Service) processSuppressionDirectly(detection models.Detection, decision models.SuppressionDecision, cameraID string, frameData []byte, frameMetadata models.FrameMetadata) error {
+func (s *Service) processSuppressionDirectly(detection models.Detection, decision models.SuppressionDecision, cameraID string, rawFrameData []byte, frameMetadata models.FrameMetadata) error {
 	start := time.Now()
 
 	// Use specialized build functions based on suppression type
@@ -358,10 +358,10 @@ func (s *Service) processSuppressionDirectly(detection models.Detection, decisio
 
 	switch decision.SuppressionType {
 	case models.SuppressionTypeTrue:
-		payload = suppressions.BuildTrueSuppression(detection, cameraID, frameData)
+		payload = suppressions.BuildTrueSuppression(detection, cameraID, rawFrameData)
 
 	case models.SuppressionTypeFalse:
-		payload = suppressions.BuildFalseSuppression(detection, cameraID, frameData)
+		payload = suppressions.BuildFalseSuppression(detection, cameraID, rawFrameData)
 
 	default:
 		log.Warn().

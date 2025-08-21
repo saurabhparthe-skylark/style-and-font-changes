@@ -92,7 +92,8 @@ type RawFrame struct {
 // ProcessedFrame represents a frame after AI processing and metadata overlay
 type ProcessedFrame struct {
 	CameraID  string
-	Data      []byte
+	Data      []byte // Annotated frame data (with overlays, bounding boxes, stats)
+	RawData   []byte // Original raw frame data (without any overlays) - for clean crops
 	Timestamp time.Time
 	FrameID   int64
 	Width     int

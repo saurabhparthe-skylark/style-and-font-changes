@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kepler WHEP Camera Stream</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .controls input, .controls button {
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .controls button {
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        .controls button:hover {
+            background: #0056b3;
+        }
+        .controls button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            max-height: 70vh;
+            display: block;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status.disconnected {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+        .logs {
+            margin-top: 20px;
+            height: 200px;
+            overflow-y: auto;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 Kepler MediaMTX Camera Stream</h1>
+        
+        <div class="info">
+            <strong>MediaMTX WHEP</strong> - Professional media server with WebRTC streaming<br>
+            Camera streams are automatically published to MediaMTX via RTMP!
+        </div>
+        
+        <div class="controls">
+            <input type="text" id="workerUrl" placeholder="Worker URL (e.g., http://localhost:8080)" value="http://localhost:8080">
+            <input type="text" id="mediamtxUrl" placeholder="MediaMTX URL (e.g., http://localhost:8889)" value="http://localhost:8889">
+            <input type="text" id="cameraId" placeholder="Camera ID" value="camera1">
+            <button id="connectBtn" onclick="connect()">Connect via MediaMTX</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+        </div>
+
+        <div class="video-container">
+            <video id="videoElement" autoplay muted controls></video>
+        </div>
+
+        <div id="status" class="status disconnected">Status: Disconnected</div>
+
+        <div class="logs" id="logs"></div>
+    </div>
+
+    <script>
+        let peerConnection = null;
+        let workerUrl = '';
+        let mediamtxUrl = '';
+        let cameraId = '';
+        let sessionUrl = '';
+
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${timestamp}] ${message}\n`;
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function updateStatus(status, className) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = `Status: ${status}`;
+            statusElement.className = `status ${className}`;
+        }
+
+        async function connect() {
+            try {
+                workerUrl = document.getElementById('workerUrl').value.trim();
+                mediamtxUrl = document.getElementById('mediamtxUrl').value.trim();
+                cameraId = document.getElementById('cameraId').value.trim();
+                
+                if (!workerUrl || !mediamtxUrl || !cameraId) {
+                    alert('Please enter worker URL, MediaMTX URL, and camera ID');
+                    return;
+                }
+
+                log(`🔗 Connecting to camera ${cameraId} via MediaMTX`);
+                updateStatus('Connecting...', 'connecting');
+                document.getElementById('connectBtn').disabled = true;
+
+                // Create RTCPeerConnection
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+
+                // Add receive-only transceiver for video
+                peerConnection.addTransceiver('video', { direction: 'recvonly' });
+
+                // Handle incoming stream
+                peerConnection.ontrack = (event) => {
+                    log('📺 Received video stream');
+                    const videoElement = document.getElementById('videoElement');
+                    videoElement.srcObject = event.streams[0];
+                };
+
+                // Handle connection state changes
+                peerConnection.onconnectionstatechange = () => {
+                    const state = peerConnection.connectionState;
+                    log(`🔗 Connection state: ${state}`);
+                    
+                    switch (state) {
+                        case 'connected':
+                            updateStatus('Connected', 'connected');
+                            document.getElementById('disconnectBtn').disabled = false;
+                            break;
+                        case 'disconnected':
+                        case 'failed':
+                        case 'closed':
+                            updateStatus('Disconnected', 'disconnected');
+                            document.getElementById('connectBtn').disabled = false;
+                            document.getElementById('disconnectBtn').disabled = true;
+                            break;
+                    }
+                };
+
+                // Handle ICE candidates (WHEP style)
+                let iceCandidates = [];
+                peerConnection.onicecandidate = async (event) => {
+                    if (event.candidate) {
+                        if (sessionUrl) {
+                            log('🧊 Sending ICE candidate via WHEP');
+                            await sendIceCandidate(event.candidate);
+                        } else {
+                            // Store candidates until we have session URL
+                            iceCandidates.push(event.candidate);
+                        }
+                    }
+                };
+
+                // Create offer and wait for ICE gathering
+                log('📝 Creating SDP offer');
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                // Wait for ICE gathering to complete
+                log('🧊 Gathering ICE candidates...');
+                await new Promise((resolve) => {
+                    if (peerConnection.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const checkState = () => {
+                            if (peerConnection.iceGatheringState === 'complete') {
+                                peerConnection.removeEventListener('icegatheringstatechange', checkState);
+                                resolve();
+                            }
+                        };
+                        peerConnection.addEventListener('icegatheringstatechange', checkState);
+                        
+                        // Fallback timeout
+                        setTimeout(resolve, 3000);
+                    }
+                });
+
+                // Send WHEP request to MediaMTX
+                log('🚀 Sending WHEP request to MediaMTX');
+                const whepUrl = `${mediamtxUrl}/live/${cameraId}/whep`;
+                const response = await fetch(whepUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/sdp',
+                    },
+                    body: peerConnection.localDescription.sdp
+                });
+
+                if (!response.ok) {
+                    throw new Error(`WHEP request failed: ${response.status} ${response.statusText}`);
+                }
+
+                // Get session URL from Location header
+                sessionUrl = response.headers.get('Location');
+                if (sessionUrl && !sessionUrl.startsWith('http')) {
+                    sessionUrl = mediamtxUrl + sessionUrl;
+                }
+
+                // Get SDP answer
+                const answerSDP = await response.text();
+                log('✅ Received SDP answer');
+
+                // Set remote description
+                const answer = {
+                    type: 'answer',
+                    sdp: answerSDP
+                };
+                await peerConnection.setRemoteDescription(answer);
+
+                // Send any stored ICE candidates
+                if (iceCandidates.length > 0) {
+                    log(`🧊 Sending ${iceCandidates.length} stored ICE candidates`);
+                    for (const candidate of iceCandidates) {
+                        await sendIceCandidate(candidate);
+                    }
+                    iceCandidates = [];
+                }
+
+                log('🎉 MediaMTX WHEP connection established');
+
+            } catch (error) {
+                log(`❌ Error: ${error.message}`);
+                updateStatus(`Error: ${error.message}`, 'error');
+                document.getElementById('connectBtn').disabled = false;
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                }
+            }
+        }
+
+        async function sendIceCandidate(candidate) {
+            if (!sessionUrl) return;
+            
+            try {
+                // Convert to SDP fragment format for WHEP
+                const candidateLine = `a=candidate:${candidate.candidate.substring(10)}\n`;
+                
+                const response = await fetch(sessionUrl, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/trickle-ice-sdpfrag',
+                    },
+                    body: candidateLine
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Failed to send ICE candidate: ${response.statusText}`);
+                }
+            } catch (error) {
+                log(`⚠️ Error sending ICE candidate: ${error.message}`);
+            }
+        }
+
+        async function disconnect() {
+            try {
+                if (peerConnection) {
+                    log('🔌 Disconnecting...');
+                    
+                    // Terminate WHEP session
+                    if (sessionUrl) {
+                        try {
+                            await fetch(sessionUrl, {
+                                method: 'DELETE'
+                            });
+                            log('🗑️ WHEP session terminated');
+                        } catch (error) {
+                            log(`⚠️ Error terminating session: ${error.message}`);
+                        }
+                    }
+
+                    peerConnection.close();
+                    peerConnection = null;
+                    sessionUrl = '';
+
+                    // Clear video
+                    const videoElement = document.getElementById('videoElement');
+                    videoElement.srcObject = null;
+
+                    updateStatus('Disconnected', 'disconnected');
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    
+                    log('✅ Disconnected successfully');
+                }
+            } catch (error) {
+                log(`❌ Error during disconnect: ${error.message}`);
+            }
+        }
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            if (peerConnection) {
+                disconnect();
+            }
+        });
+
+        // Initialize
+        log('🎥 MediaMTX WHEP client ready!');
+        log('ℹ️ MediaMTX handles all WebRTC complexity - just stream and connect!');
+    </script>
+</body>
+</html>

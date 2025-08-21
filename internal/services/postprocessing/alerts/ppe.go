@@ -13,12 +13,12 @@ import (
 // HandlePPEDetection handles PPE detection alerts
 func HandlePPEDetection(detection models.Detection, decision models.AlertDecision) models.AlertDecision {
 	// PPE alerts are only created for persons with violations and send_alert=true
-	// if !detection.SendAlert {
-	// 	log.Info().
-	// 		Int32("track_id", detection.TrackID).
-	// 		Msg("PPE detection: send_alert=false, no alert created")
-	// 	return decision
-	// }
+	if !detection.SendAlert {
+		log.Info().
+			Int32("track_id", detection.TrackID).
+			Msg("PPE detection: send_alert=false, no alert created")
+		return decision
+	}
 
 	if len(detection.Violations) == 0 {
 		return decision
@@ -102,7 +102,7 @@ func BuildPPEAlert(detection models.Detection, cameraID string, frame []byte) mo
 }
 
 // BuildConsolidatedPPEAlert creates a consolidated PPE alert for multiple detections in the same frame
-func BuildConsolidatedPPEAlert(detections []models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildConsolidatedPPEAlert(detections []models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 	if len(detections) == 0 {
 		log.Warn().Str("camera_id", cameraID).Msg("No detections provided for consolidated PPE alert")
 		return models.AlertPayload{}
@@ -171,12 +171,12 @@ func BuildConsolidatedPPEAlert(detections []models.Detection, cameraID string, f
 		Metadata: decision.Metadata,
 	}
 
-	// Add context image
-	helpers.AddContextImage(&payload, frame, cameraID, primaryDetection.TrackID, "Consolidated PPE alert")
+	// Add context image using annotated frame (shows full scene with overlays)
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, primaryDetection.TrackID, "Consolidated PPE alert")
 
-	// Add detection images for ALL detections
+	// Add detection images for ALL detections using raw frame (clean crops without overlays)
 	for i, detection := range detections {
-		helpers.AddDetectionImage(&payload, detection, frame, cameraID,
+		helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID,
 			fmt.Sprintf("ppe_consolidated_%d_%d", detection.TrackID, i),
 			map[string]interface{}{
 				"alert_type":       decision.AlertType,

@@ -74,7 +74,10 @@ func (s *Server) setupRoutes() {
 		cameraGroup.PUT("/:camera_id", cameraHandler.UpsertCamera)           // Upsert camera settings
 		cameraGroup.POST("/:camera_id/restart", cameraHandler.RestartCamera) // Hard restart camera
 		cameraGroup.DELETE("/:camera_id", cameraHandler.DeleteCamera)        // Delete camera (REST-compliant)
+
 	}
+
+	// MJPEG stream endpoint (top-level to match generated URLs like /mjpeg/:camera_id)
 	s.router.GET("/mjpeg/:camera_id", func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		s.container.CameraManager.ServeHTTP(c.Writer, c.Request)

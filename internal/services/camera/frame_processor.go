@@ -137,15 +137,6 @@ func (fp *FrameProcessor) initGRPCConnection(endpoint string) error {
 }
 
 // parseGRPCEndpoint parses and normalizes a gRPC endpoint, returning the normalized endpoint and appropriate credentials
-// Supported endpoint formats:
-// - https://example.com (defaults to port 443)
-// - https://example.com:9443
-// - http://example.com (defaults to port 80)
-// - http://example.com:50051
-// - example.com (domain without port, defaults to https://example.com:443)
-// - example.com:443 (domain with secure port, defaults to https)
-// - example.com:50051 (domain with custom port, defaults to http)
-// - 192.168.1.76:50052 (IP with port, defaults to http)
 func (fp *FrameProcessor) parseGRPCEndpoint(endpoint string) (string, credentials.TransportCredentials, error) {
 	// Handle case where endpoint doesn't have a scheme
 	if !strings.Contains(endpoint, "://") {
@@ -268,6 +259,7 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 	processedFrame := &models.ProcessedFrame{
 		CameraID:  rawFrame.CameraID,
 		Data:      rawFrame.Data, // Will be modified by addEnhancedStatsFrame (BGR format)
+		RawData:   rawFrame.Data, // Preserve original raw frame data for clean crops
 		Timestamp: rawFrame.Timestamp,
 		FrameID:   rawFrame.FrameID,
 		Width:     rawFrame.Width,
@@ -409,6 +401,12 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 
 	// Call AI service directly
 	resp, err := fp.grpcClient.InferDetection(ctx, req)
+
+	log.Debug().
+		Str("camera_id", rawFrame.CameraID).
+		Str("json_data", resp.String()).
+		Msg("AI response")
+
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("AI service call failed: %v", err)
 		log.Error().
@@ -418,6 +416,11 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 			Msg("ai_grpc_call_failed")
 		return result
 	}
+
+	log.Debug().
+		Str("camera_id", rawFrame.CameraID).
+		Int("detection_count", len(result.Detections)).
+		Msg("ai_processing_completed")
 
 	result.FrameProcessed = true
 	fp.extractDetectionsFromResponse(resp, result)
