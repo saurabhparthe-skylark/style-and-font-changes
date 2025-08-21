@@ -31,6 +31,9 @@ const (
 	MaxTotalPayloadSize   = 1024 * 1024 // 1MB total payload limit
 )
 
+// DefaultCropPaddingRatio is the default percentage of bbox size added as padding on all sides
+const DefaultCropPaddingRatio float32 = 0.4
+
 // Helper functions
 func max(a, b int) int {
 	if a > b {
@@ -287,85 +290,79 @@ func CreateCroppedImageB64(frame []byte, bbox []float32, cameraID, identifier st
 			Msg("📸 Using pixel coordinates directly")
 	}
 
-	// Ensure coordinates are within image bounds
-	x1 = max(0, min(int(imgWidth)-1, x1))
-	y1 = max(0, min(int(imgHeight)-1, y1))
-	x2 = max(0, min(int(imgWidth), x2))
-	y2 = max(0, min(int(imgHeight), y2))
+	// Expand crop rectangle by padding around bbox
+	// Padding is applied as a ratio of bbox width/height on all sides
+	bboxWidth := x2 - x1
+	bboxHeight := y2 - y1
+	if bboxWidth > 0 && bboxHeight > 0 {
+		padX := int(float32(bboxWidth) * DefaultCropPaddingRatio)
+		padY := int(float32(bboxHeight) * DefaultCropPaddingRatio)
+		x1 -= padX
+		y1 -= padY
+		x2 += padX
+		y2 += padY
+	}
+
+	// At this point, x1..y2 may extend beyond image bounds due to padding.
+	// Instead of clamping (which shrinks crops near edges), we create a target
+	// rectangle of the desired size and copy the intersection from the source
+	// image, leaving out-of-bounds areas black.
 
 	// Ensure minimum crop size (at least 10x10 pixels for visibility)
 	minCropSize := 10
-	cropWidth := x2 - x1
-	cropHeight := y2 - y1
-
-	if cropWidth < minCropSize {
-		// Expand width around center
+	if (x2 - x1) < minCropSize {
 		center := (x1 + x2) / 2
-		x1 = max(0, center-minCropSize/2)
-		x2 = min(int(imgWidth), x1+minCropSize)
-
-		// If still too small, adjust
-		if x2-x1 < minCropSize {
-			x2 = min(int(imgWidth), x1+minCropSize)
-		}
+		x1 = center - minCropSize/2
+		x2 = x1 + minCropSize
 	}
-
-	if cropHeight < minCropSize {
-		// Expand height around center
+	if (y2 - y1) < minCropSize {
 		center := (y1 + y2) / 2
-		y1 = max(0, center-minCropSize/2)
-		y2 = min(int(imgHeight), y1+minCropSize)
+		y1 = center - minCropSize/2
+		y2 = y1 + minCropSize
+	}
 
-		// If still too small, adjust
-		if y2-y1 < minCropSize {
-			y2 = min(int(imgHeight), y1+minCropSize)
+	// Define target (padded) rect and intersect with image bounds
+	targetRect := image.Rect(x1, y1, x2, y2)
+	srcBounds := img.Bounds()
+	intersect := targetRect.Intersect(srcBounds)
+
+	// Validate rectangles
+	if targetRect.Dx() <= 0 || targetRect.Dy() <= 0 || intersect.Dx() <= 0 || intersect.Dy() <= 0 {
+		log.Warn().
+			Str("camera_id", cameraID).
+			Str("identifier", identifier).
+			Floats32("original_bbox", bbox).
+			Ints("target_rect", []int{targetRect.Min.X, targetRect.Min.Y, targetRect.Max.X, targetRect.Max.Y}).
+			Ints("img_bounds", []int{srcBounds.Min.X, srcBounds.Min.Y, srcBounds.Max.X, srcBounds.Max.Y}).
+			Msg("📸 Invalid crop intersection after processing")
+		return "", fmt.Errorf("invalid crop intersection: target=[%d,%d,%d,%d] image=[%d,%d,%d,%d]",
+			targetRect.Min.X, targetRect.Min.Y, targetRect.Max.X, targetRect.Max.Y,
+			srcBounds.Min.X, srcBounds.Min.Y, srcBounds.Max.X, srcBounds.Max.Y)
+	}
+
+	// Create destination with origin at (0,0); default pixels are black
+	croppedImg := image.NewRGBA(image.Rect(0, 0, targetRect.Dx(), targetRect.Dy()))
+
+	// Copy only the intersection; offset into destination so padding becomes black borders
+	for y := intersect.Min.Y; y < intersect.Max.Y; y++ {
+		destY := y - targetRect.Min.Y
+		for x := intersect.Min.X; x < intersect.Max.X; x++ {
+			destX := x - targetRect.Min.X
+			croppedImg.Set(destX, destY, img.At(x, y))
 		}
-	}
-
-	// Final bounds check
-	if x2 > int(imgWidth) {
-		x2 = int(imgWidth)
-	}
-	if y2 > int(imgHeight) {
-		y2 = int(imgHeight)
 	}
 
 	log.Debug().
 		Str("camera_id", cameraID).
 		Str("identifier", identifier).
 		Ints("final_coords", []int{x1, y1, x2, y2}).
-		Int("crop_width", x2-x1).
-		Int("crop_height", y2-y1).
-		Msg("📸 Final crop coordinates")
+		Int("crop_width", targetRect.Dx()).
+		Int("crop_height", targetRect.Dy()).
+		Msg("📸 Final crop coordinates with edge padding")
 
-	// Validate crop rectangle
-	if x1 >= x2 || y1 >= y2 || x2-x1 < 1 || y2-y1 < 1 {
-		log.Warn().
-			Str("camera_id", cameraID).
-			Str("identifier", identifier).
-			Floats32("original_bbox", bbox).
-			Ints("calculated_coords", []int{x1, y1, x2, y2}).
-			Float32("img_width", imgWidth).
-			Float32("img_height", imgHeight).
-			Msg("📸 Invalid crop coordinates after processing")
-		return "", fmt.Errorf("invalid crop coordinates: [%d,%d,%d,%d] from bbox [%.3f,%.3f,%.3f,%.3f] on image %dx%d",
-			x1, y1, x2, y2, bbox[0], bbox[1], bbox[2], bbox[3], int(imgWidth), int(imgHeight))
-	}
-
-	// Create cropped image
-	cropRect := image.Rect(x1, y1, x2, y2)
-	croppedImg := image.NewRGBA(cropRect)
-
-	// Copy the cropped portion
-	for y := y1; y < y2; y++ {
-		for x := x1; x < x2; x++ {
-			croppedImg.Set(x, y, img.At(x, y))
-		}
-	}
-
-	// Encode cropped image directly without compression for performance
+	// Encode cropped image directly without additional compression step
 	var buf bytes.Buffer
-	err = jpeg.Encode(&buf, croppedImg, &jpeg.Options{Quality: 95}) // High quality, no compression
+	err = jpeg.Encode(&buf, croppedImg, &jpeg.Options{Quality: 95})
 	if err != nil {
 		log.Warn().
 			Err(err).

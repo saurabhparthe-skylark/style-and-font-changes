@@ -199,7 +199,7 @@ func Load() *Config {
 		// Alerting via NATS
 		AlertsSubject:  getEnv("ALERTS_SUBJECT", "alerts"),
 		AlertsWorkers:  getEnvInt("ALERTS_WORKERS", 2),
-		AlertsCooldown: getEnvDuration("ALERTS_COOLDOWN", 2*time.Second),
+		AlertsCooldown: getEnvDuration("ALERTS_COOLDOWN", 10*time.Second),
 
 		// Suppressions via NATS
 		SuppressionSubject:  getEnv("SUPPRESSION_SUBJECT", "suppressions"),

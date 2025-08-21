@@ -7,10 +7,24 @@ services:
       dockerfile: docker/Dockerfile
       args:
         - VERSION=${VERSION:-1.0.0}
-    env_file:
-      - ../.env
-    # environment:
-    #   - NATS_URL=nats://nats:4222
+    environment:
+      - NATS_URL=nats://localhost:4222
+      - AI_GRPC_URL=49.248.155.76:50052
+      - SHOW_METADATA=true
+      - SHOW_CAMERA_ID=false
+      - SHOW_FRAME_ID=false
+      - SHOW_RESOLUTION=false
+      - SHOW_FPS=true
+      - SHOW_LATENCY=false
+      - SHOW_AI_STATUS=true
+      - SHOW_AI_DETECTIONS_COUNT=false
+      - SHOW_AI_PROCESSING_TIME=false
+      - SHOW_PROJECT_COUNTS=false
+      - SHOW_TIME=false
+      - SHOW_QUALITY=false
+      - SHOW_BITRATE=false
+      - OVERLAY_COLOR="#FFFFFF"
+      - OVERLAY_FONT=2
     ports:
       - "8000:8000"    # Main API
       - "8080:8080"    # Logdy web interface (if enabled)

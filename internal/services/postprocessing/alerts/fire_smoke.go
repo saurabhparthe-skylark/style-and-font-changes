@@ -12,14 +12,13 @@ import (
 
 // HandleFireSmokeDetection handles fire and smoke detection alerts
 func HandleFireSmokeDetection(detection models.Detection, decision models.AlertDecision) models.AlertDecision {
+	if detection.SendAlert {
+		decision.ShouldAlert = true
+	}
+
 	isFire := detection.IsFire != nil && *detection.IsFire
 	isSmoke := detection.IsSmoke != nil && *detection.IsSmoke
 
-	// if !isFire && !isSmoke {
-	// 	return decision
-	// }
-
-	decision.ShouldAlert = true
 	decision.AlertType = models.AlertTypeFireSmoke
 	decision.Severity = models.AlertSeverityCritical
 	decision.Title = CreateFireSmokeTitle(isFire, isSmoke)
@@ -38,7 +37,7 @@ func HandleFireSmokeDetection(detection models.Detection, decision models.AlertD
 }
 
 // BuildFireSmokeAlert creates a complete fire/smoke alert payload with images
-func BuildFireSmokeAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildFireSmokeAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 	isFire := detection.IsFire != nil && *detection.IsFire
 	isSmoke := detection.IsSmoke != nil && *detection.IsSmoke
 
@@ -95,10 +94,10 @@ func BuildFireSmokeAlert(detection models.Detection, cameraID string, frame []by
 	}
 
 	// Add context image using helper
-	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "fire/smoke alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, detection.TrackID, "fire/smoke alert")
 
 	// Add detection image using helper with fire/smoke specific metadata
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("fire_smoke_alert_%d", detection.TrackID), map[string]interface{}{
+	helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID, fmt.Sprintf("fire_smoke_alert_%d", detection.TrackID), map[string]interface{}{
 		"alert_type":     decision.AlertType,
 		"is_fire":        detection.IsFire,
 		"is_smoke":       detection.IsSmoke,

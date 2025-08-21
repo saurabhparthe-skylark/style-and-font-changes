@@ -370,12 +370,12 @@ func (cm *CameraManager) runPublisher(camera *models.Camera) {
 				camera.ErrorCount++
 			}
 
-			// Publish to MediaMTX via publisher service
-			err = cm.publisherSvc.PublishFrame(processedFrame)
-			if err != nil {
-				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish MediaMTX frame")
-				// Don't increment error count for MediaMTX failures as it's secondary
-			}
+			// // Publish to MediaMTX via publisher service
+			// err = cm.publisherSvc.PublishFrame(processedFrame)
+			// if err != nil {
+			// 	log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish MediaMTX frame")
+			// 	// Don't increment error count for MediaMTX failures as it's secondary
+			// }
 		}
 	}
 }
@@ -775,7 +775,8 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	}
 
 	if aiChanged {
-		needsFrameProcessorRestart = true
+		// Do not restart components on AI changes; frame processor lazily refreshes gRPC
+		needsFrameProcessorRestart = false
 		log.Info().
 			Str("camera_id", cameraID).
 			Bool("old_ai_enabled", oldAIEnabled).
@@ -784,7 +785,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 			Str("new_ai_endpoint", camera.AIEndpoint).
 			Dur("old_ai_timeout", oldAITimeout).
 			Dur("new_ai_timeout", camera.AITimeout).
-			Msg("AI configuration updated, will restart frame processor")
+			Msg("AI configuration updated without restart (lazy refresh)")
 	}
 
 	// Update recording settings
@@ -933,7 +934,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 		go cm.runFrameProcessor(camera)
 		go cm.runPublisher(camera)
 		go cm.runPostProcessor(camera)
-		go cm.runRecorderProcessor(camera)
+		// go cm.runRecorderProcessor(camera)
 
 		log.Info().
 			Str("camera_id", cameraID).

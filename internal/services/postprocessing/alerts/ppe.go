@@ -15,6 +15,11 @@ func HandlePPEDetection(detection models.Detection, decision models.AlertDecisio
 	// Build violations from available fields if missing
 	violations := append([]string{}, detection.Violations...)
 
+	//if send alert is not true, return decision
+	if !decision.ShouldAlert {
+		return decision
+	}
+
 	// Derive violations from has_* flags when present
 	if detection.HasVest != nil && !*detection.HasVest {
 		violations = append(violations, "vest violation")
@@ -204,7 +209,7 @@ func BuildConsolidatedPPEAlert(detections []models.Detection, cameraID string, r
 	}
 
 	// Add context image using annotated frame (shows full scene with overlays)
-	helpers.AddContextImage(&payload, rawFrame, cameraID, primaryDetection.TrackID, "Consolidated PPE alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, primaryDetection.TrackID, "Consolidated PPE alert")
 
 	// Add detection images: primary from annotated (with overlays), others from raw (clean)
 	for i, detection := range detections {

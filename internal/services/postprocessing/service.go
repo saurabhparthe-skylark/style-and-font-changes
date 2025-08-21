@@ -129,7 +129,86 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 		// Use the highest confidence detection as the primary one for decision making
 		primaryDetection := s.findPrimaryDetection(typeDetections)
 
-		// Determine if alert should be created based on primary detection
+		// Determine detection type for this group
+		groupDetectionType := s.getDetectionType(primaryDetection.ProjectName, primaryDetection.Label)
+
+		// Special handling: Fire/Smoke alerts should be sent per detection with per-track cooldown
+		if groupDetectionType == models.DetectionTypeFireSmoke {
+			for _, det := range typeDetections {
+				dec := s.ShouldCreateAlert(det, det.ProjectName)
+				if !dec.ShouldAlert {
+					continue
+				}
+
+				// Per-detection cooldown keyed by track ID
+				cooldownKey := models.AlertCooldownKey{
+					CameraID:    cameraID,
+					ProjectName: det.ProjectName,
+					TrackID:     strconv.Itoa(int(det.TrackID)),
+				}
+
+				if !s.CheckCooldown(cooldownKey, dec.CooldownType) {
+					log.Debug().
+						Str("camera_id", cameraID).
+						Int32("track_id", det.TrackID).
+						Str("cooldown_type", dec.CooldownType).
+						Msg("Alert blocked by cooldown (fire/smoke per-detection)")
+					continue
+				}
+
+				if err := s.processSingleAlert(det, dec, cameraID, rawFrameData, annotatedFrameData, frameMetadata); err != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("Alert processing error for track %d: %v", det.TrackID, err))
+				} else {
+					s.UpdateCooldown(cooldownKey, dec.CooldownType)
+					result.AlertsCreated++
+				}
+			}
+			continue
+		}
+
+		// PPE special handling: determine alert based on any violating detection in the frame
+		if groupDetectionType == models.DetectionTypePPE {
+			var groupDecision models.AlertDecision
+			ppeShouldAlert := false
+			for _, det := range typeDetections {
+				dec := s.ShouldCreateAlert(det, det.ProjectName)
+				if dec.ShouldAlert {
+					groupDecision = dec
+					ppeShouldAlert = true
+					break
+				}
+			}
+
+			if !ppeShouldAlert {
+				continue
+			}
+
+			cooldownKey := models.AlertCooldownKey{
+				CameraID:    cameraID,
+				ProjectName: primaryDetection.ProjectName,
+				TrackID:     fmt.Sprintf("type_%s", string(groupDetectionType)),
+			}
+
+			if !s.CheckCooldown(cooldownKey, groupDecision.CooldownType) {
+				log.Debug().
+					Str("camera_id", cameraID).
+					Str("type_key", typeKey).
+					Int("detection_count", len(typeDetections)).
+					Str("cooldown_type", groupDecision.CooldownType).
+					Msg("Alert blocked by cooldown")
+				continue
+			}
+
+			if err := s.processConsolidatedAlert(typeDetections, groupDecision, cameraID, rawFrameData, annotatedFrameData, frameMetadata); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("Alert processing error for type %s: %v", typeKey, err))
+			} else {
+				s.UpdateCooldown(cooldownKey, groupDecision.CooldownType)
+				result.AlertsCreated++
+			}
+			continue
+		}
+
+		// Default handling: consolidated alert per type per frame (e.g., drone, general)
 		decision := s.ShouldCreateAlert(primaryDetection, primaryDetection.ProjectName)
 		if !decision.ShouldAlert {
 			continue
@@ -139,7 +218,7 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 		cooldownKey := models.AlertCooldownKey{
 			CameraID:    cameraID,
 			ProjectName: primaryDetection.ProjectName,
-			TrackID:     fmt.Sprintf("type_%s", string(s.getDetectionType(primaryDetection.ProjectName, primaryDetection.Label))),
+			TrackID:     fmt.Sprintf("type_%s", string(groupDetectionType)),
 		}
 
 		if !s.CheckCooldown(cooldownKey, decision.CooldownType) {
@@ -220,11 +299,11 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 	case models.DetectionTypePPE:
 		return alerts.HandlePPEDetection(detection, decision)
 
-	case models.DetectionTypeCellphone:
-		return alerts.HandleCellphoneDetection(detection, decision)
-
 	case models.DetectionTypeDrone, models.DetectionTypeAircraft, models.DetectionTypeThermal:
 		return alerts.HandleDroneDetection(detection, decision)
+
+	case models.DetectionTypeVehicle:
+		return alerts.HandleVehicleDetection(detection, decision)
 
 	case models.DetectionTypeFireSmoke:
 		return alerts.HandleFireSmokeDetection(detection, decision)
@@ -260,11 +339,11 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 	case models.AlertTypePPEViolation:
 		payload = alerts.BuildConsolidatedPPEAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
-	case models.AlertTypeCellphoneUsage:
-		payload = alerts.BuildConsolidatedCellphoneAlert(detections, cameraID, rawFrameData, annotatedFrameData)
-
 	case models.AlertTypeDroneDetection:
 		payload = alerts.BuildConsolidatedDroneAlert(detections, cameraID, rawFrameData, annotatedFrameData)
+
+	case models.AlertTypeVehicleDetection:
+		payload = alerts.BuildConsolidatedVehicleAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeFireSmoke:
 		payload = alerts.BuildConsolidatedFireSmokeAlert(detections, cameraID, rawFrameData, annotatedFrameData)
@@ -314,6 +393,16 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 				Str("alert_type", string(payload.Alert.AlertType)).
 				Msg("Payload size validation failed, but continuing for performance")
 		}
+	}
+
+	// Require at least one detection image; skip if cropping failed
+	if len(payload.DetectionImages) == 0 {
+		log.Warn().
+			Str("camera_id", cameraID).
+			Int("detection_count", len(detections)).
+			Str("alert_type", string(payload.Alert.AlertType)).
+			Msg("Skipping consolidated alert publish: no detection images (crop failed)")
+		return nil
 	}
 
 	// Publish alert
@@ -436,12 +525,14 @@ func (s *Service) getDetectionType(projectName, label string) models.DetectionTy
 
 	// Project name based mapping (primary)
 	switch {
-	case strings.Contains(projectLower, "ppe_detection"):
+	case strings.Contains(projectLower, "ppe_detection") || strings.Contains(projectLower, "ppe_detection_new"):
 		return models.DetectionTypePPE
 	case strings.Contains(projectLower, "cellphone"):
 		return models.DetectionTypeCellphone
 	case strings.Contains(projectLower, "drone") || strings.Contains(projectLower, "aircraft"):
 		return models.DetectionTypeDrone
+	case strings.Contains(projectLower, "vehicle_detection_s") || strings.Contains(projectLower, "vehicle_detection_lr"):
+		return models.DetectionTypeVehicle
 	case strings.Contains(projectLower, "thermal_aircraft"):
 		return models.DetectionTypeThermal
 	case strings.Contains(projectLower, "fire_smoke"):
@@ -456,6 +547,8 @@ func (s *Service) getDetectionType(projectName, label string) models.DetectionTy
 		return models.DetectionTypeCellphone
 	case strings.Contains(labelLower, "drone") || strings.Contains(labelLower, "aircraft") || strings.Contains(labelLower, "quadcopter"):
 		return models.DetectionTypeDrone
+	case strings.Contains(labelLower, "car") || strings.Contains(labelLower, "truck") || strings.Contains(labelLower, "bus") || strings.Contains(labelLower, "motorcycle") || strings.Contains(labelLower, "bike") || strings.Contains(labelLower, "scooter") || strings.Contains(labelLower, "van") || strings.Contains(labelLower, "vehicle"):
+		return models.DetectionTypeVehicle
 	case strings.Contains(labelLower, "fire") || strings.Contains(labelLower, "smoke"):
 		return models.DetectionTypeFireSmoke
 	default:
@@ -509,4 +602,94 @@ func (s *Service) UpdateCooldown(key models.AlertCooldownKey, cooldownType strin
 	defer s.cooldownMu.Unlock()
 
 	s.lastSent[key.String()] = time.Now()
+}
+
+// processSingleAlert builds and publishes an alert for a single detection
+func (s *Service) processSingleAlert(detection models.Detection, decision models.AlertDecision, cameraID string, rawFrameData []byte, annotatedFrameData []byte, frameMetadata models.FrameMetadata) error {
+	start := time.Now()
+
+	// Build payload based on alert type
+	var payload models.AlertPayload
+	switch decision.AlertType {
+	case models.AlertTypePPEViolation:
+		payload = alerts.BuildPPEAlert(detection, cameraID, rawFrameData)
+	case models.AlertTypeDroneDetection:
+		payload = alerts.BuildDroneAlert(detection, cameraID, rawFrameData)
+	case models.AlertTypeVehicleDetection:
+		payload = alerts.BuildVehicleAlert(detection, cameraID, rawFrameData, annotatedFrameData)
+	case models.AlertTypeFireSmoke:
+		payload = alerts.BuildFireSmokeAlert(detection, cameraID, rawFrameData, annotatedFrameData)
+	case models.AlertTypeAnomalyDetection:
+		payload = alerts.BuildAnomalyAlert(detection, cameraID, rawFrameData)
+	case models.AlertTypeSelfLearned:
+		payload = alerts.BuildSelfLearningAlert(detection, cameraID, rawFrameData)
+	default:
+		payload = alerts.BuildGeneralAlert(detection, cameraID, rawFrameData)
+	}
+
+	// Add processing metadata
+	if payload.Metadata == nil {
+		payload.Metadata = make(map[string]interface{})
+	}
+	payload.Metadata["processing_time_ms"] = time.Since(start).Milliseconds()
+	payload.Metadata["frame_dimensions"] = map[string]interface{}{
+		"width":  frameMetadata.Width,
+		"height": frameMetadata.Height,
+	}
+	payload.Metadata["processing_timestamp"] = time.Now()
+
+	// Update detection record with frame metadata
+	if payload.DetectionRecord.FrameID == 0 {
+		payload.DetectionRecord.FrameID = frameMetadata.FrameID
+		payload.DetectionRecord.DetectionCountInFrame = 1
+	}
+
+	// Optional payload optimization
+	if s.cfg.ImageCompressionEnabled {
+		if err := helpers.OptimizePayloadForSizeWithConfig(&payload, s.cfg); err != nil {
+			log.Warn().
+				Err(err).
+				Str("camera_id", cameraID).
+				Int32("track_id", detection.TrackID).
+				Str("alert_type", string(payload.Alert.AlertType)).
+				Msg("Payload size validation failed, but continuing for performance")
+		}
+	}
+
+	// Require at least one detection image; skip if cropping failed
+	if len(payload.DetectionImages) == 0 {
+		log.Warn().
+			Str("camera_id", cameraID).
+			Int32("track_id", detection.TrackID).
+			Str("alert_type", string(payload.Alert.AlertType)).
+			Msg("Skipping alert publish: no detection images (crop failed)")
+		return nil
+	}
+
+	// Publish alert
+	subject := s.cfg.AlertsSubject
+	if subject == "" {
+		subject = "alerts.ppe"
+	}
+
+	if err := s.publisher.Publish(subject, payload); err != nil {
+		log.Error().
+			Err(err).
+			Str("camera_id", cameraID).
+			Int32("track_id", detection.TrackID).
+			Str("alert_type", string(payload.Alert.AlertType)).
+			Msg("Failed to publish alert")
+		return err
+	}
+
+	processingTime := time.Since(start)
+	log.Info().
+		Str("camera_id", cameraID).
+		Int32("track_id", detection.TrackID).
+		Str("alert_type", string(payload.Alert.AlertType)).
+		Str("severity", string(payload.Alert.Severity)).
+		Dur("processing_time", processingTime).
+		Msg("🚀 Alert published successfully")
+
+	return nil
 }

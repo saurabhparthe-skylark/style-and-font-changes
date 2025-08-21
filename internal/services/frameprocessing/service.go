@@ -160,6 +160,32 @@ func (fp *FrameProcessor) Shutdown() {
 	}
 }
 
+// refreshAIConnection ensures the gRPC client state matches current camera AI settings.
+// It lazily connects or disconnects without requiring a pipeline restart so AI can be
+// toggled at runtime smoothly.
+func (fp *FrameProcessor) refreshAIConnection() {
+	if fp.camera == nil {
+		return
+	}
+
+	// If AI is disabled or endpoint missing, ensure connection is torn down
+	if !fp.camera.AIEnabled || fp.camera.AIEndpoint == "" {
+		if fp.grpcConn != nil || fp.grpcClient != nil {
+			log.Info().Str("camera_id", fp.camera.ID).Msg("AI disabled - closing gRPC connection")
+			fp.Shutdown()
+			fp.aiEndpoint = ""
+		}
+		return
+	}
+
+	// If AI is enabled, (re)establish connection when needed
+	if fp.grpcClient == nil || fp.aiEndpoint != fp.camera.AIEndpoint {
+		if err := fp.initGRPCConnection(fp.camera.AIEndpoint); err != nil {
+			log.Error().Err(err).Str("camera_id", fp.camera.ID).Str("ai_endpoint", fp.camera.AIEndpoint).Msg("Failed to (re)initialize AI gRPC connection")
+		}
+	}
+}
+
 type SolutionResults struct {
 	CurrentCount      int32 `json:"current_count"`
 	TotalCount        int32 `json:"total_count"`
@@ -245,10 +271,6 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1, y2-cornerLength), detColor, cornerThickness)
 		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2-cornerLength, y2), detColor, cornerThickness)
 		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2, y2-cornerLength), detColor, cornerThickness)
-		labelText := formatDetectionLabel(det)
-		if labelText != "" {
-			drawLabelWithBackground(mat, labelText, x1, y1, detColor)
-		}
 	}
 }
 
@@ -256,15 +278,17 @@ func (d defaultOverlay) DrawSolutions(mat *gocv.Mat, solutions map[string]Soluti
 	if mat == nil || len(solutions) == 0 {
 		return
 	}
-	y := 30
-	for solutionKey, solution := range solutions {
-		if containsString(solutionKey, "people_counter") {
-			drawPeopleCounterOverlay(mat, &y, solution)
-		}
-	}
+	// y := 30
+	// for solutionKey, solution := range solutions {
+	// 	if containsString(solutionKey, "people_counter") {
+	// 		drawPeopleCounterOverlay(mat, &y, solution)
+	// 	}
+	// }
 }
 
 func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []string, currentFPS float64, currentLatency time.Duration) *models.ProcessedFrame {
+	// Align connection state with current camera settings on each frame in a lightweight way
+	fp.refreshAIConnection()
 	aiEnabled := fp.cfg.AIEnabled
 	aiTimeout := fp.cfg.AITimeout
 	aiFrameInterval := fp.cfg.AIFrameInterval
@@ -522,19 +546,6 @@ func drawLabelWithBackground(mat *gocv.Mat, text string, x, y int, textColor col
 	gocv.Rectangle(mat, image.Rect(labelX-2, labelY-textSize.Y-2, labelX+textSize.X+2, labelY+2), bgColor, -1)
 	whiteColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
 	gocv.PutText(mat, text, image.Pt(labelX, labelY), gocv.FontHersheySimplex, fontScale, whiteColor, thickness)
-}
-
-func drawPeopleCounterOverlay(mat *gocv.Mat, y *int, solution SolutionResults) {
-	bgColor := color.RGBA{R: 0, G: 50, B: 150, A: 200}
-	gocv.Rectangle(mat, image.Rect(5, *y-25, 400, *y+60), bgColor, -1)
-	textColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
-	fontFace := gocv.FontHersheySimplex
-	fontScale := 0.8
-	gocv.PutText(mat, "People Counter", image.Pt(10, *y), fontFace, fontScale, textColor, 2)
-	*y += 30
-	counterText := fmt.Sprintf("Current: %d | Max: %d", solution.CurrentCount, solution.MaxCount)
-	gocv.PutText(mat, counterText, image.Pt(10, *y), fontFace, 0.7, textColor, 2)
-	*y += 40
 }
 
 func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *AIProcessingResult, cfg *config.Config) {
