@@ -204,13 +204,13 @@ func BuildConsolidatedPPEAlert(detections []models.Detection, cameraID string, r
 	}
 
 	// Add context image using annotated frame (shows full scene with overlays)
-	helpers.AddContextImage(&payload, annotatedFrame, cameraID, primaryDetection.TrackID, "Consolidated PPE alert")
+	helpers.AddContextImage(&payload, rawFrame, cameraID, primaryDetection.TrackID, "Consolidated PPE alert")
 
 	// Add detection images: primary from annotated (with overlays), others from raw (clean)
 	for i, detection := range detections {
 		frameForCrop := rawFrame
 		if detection.TrackID == primaryDetection.TrackID {
-			frameForCrop = annotatedFrame
+			frameForCrop = rawFrame
 		}
 		helpers.AddDetectionImage(&payload, detection, frameForCrop, cameraID,
 			fmt.Sprintf("ppe_consolidated_%d_%d", detection.TrackID, i),

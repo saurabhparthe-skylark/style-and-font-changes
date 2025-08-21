@@ -274,10 +274,16 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 		fp.camera.AIFrameCounter++
 	}
 
+	// Deep-copy raw bytes so RawData stays clean and Data is a separate buffer for overlays
+	rawCopy := make([]byte, len(rawFrame.Data))
+	copy(rawCopy, rawFrame.Data)
+	annotatedCopy := make([]byte, len(rawFrame.Data))
+	copy(annotatedCopy, rawFrame.Data)
+
 	processedFrame := &models.ProcessedFrame{
 		CameraID:  rawFrame.CameraID,
-		Data:      rawFrame.Data,
-		RawData:   rawFrame.Data,
+		Data:      annotatedCopy,
+		RawData:   rawCopy,
 		Timestamp: rawFrame.Timestamp,
 		FrameID:   rawFrame.FrameID,
 		Width:     rawFrame.Width,
@@ -470,7 +476,9 @@ func (fp *FrameProcessor) addEnhancedStatsFrame(processedFrame *models.Processed
 		defaultOverlay{}.DrawSolutions(&mat, aiResult.Solutions)
 	}
 
-	drawStatsOverlay(&mat, processedFrame, aiResult)
+	if fp.cfg != nil && fp.cfg.ShowMetadata {
+		drawStatsOverlay(&mat, processedFrame, aiResult, fp.cfg)
+	}
 	processedFrame.Data = mat.ToBytes()
 }
 
@@ -529,15 +537,19 @@ func drawPeopleCounterOverlay(mat *gocv.Mat, y *int, solution SolutionResults) {
 	*y += 40
 }
 
-func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *AIProcessingResult) {
+func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *AIProcessingResult, cfg *config.Config) {
 	if mat == nil {
 		return
 	}
-	statsLines := formatStatsLines(frame, aiResult)
+	statsLines := formatStatsLines(frame, aiResult, cfg)
 	if len(statsLines) == 0 {
 		return
 	}
 	fontFace := gocv.FontHersheySimplex
+	if cfg != nil {
+		// OverlayFont directly maps to gocv font constants
+		fontFace = gocv.HersheyFont(cfg.OverlayFont)
+	}
 	fontScale := 0.6
 	thickness := 2
 	lineHeight := 25
@@ -556,48 +568,87 @@ func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *AIP
 	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: 180}
 	gocv.Rectangle(mat, image.Rect(5, startY-padding, maxTextWidth+padding*2+5, startY+len(statsLines)*lineHeight+padding), bgColor, -1)
 	textColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	if cfg != nil && cfg.OverlayColor != "" {
+		if c, err := parseHexColor(cfg.OverlayColor); err == nil {
+			// Keep text readable: if chosen color is too dark, use white
+			if isDarkColor(c) {
+				textColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			} else {
+				textColor = c
+			}
+		}
+	}
 	for i, line := range statsLines {
 		gocv.PutText(mat, line, image.Pt(padding+5, startY+(i*lineHeight)+20), fontFace, fontScale, textColor, thickness)
 	}
 }
 
-func formatStatsLines(frame *models.ProcessedFrame, aiResult *AIProcessingResult) []string {
+func formatStatsLines(frame *models.ProcessedFrame, aiResult *AIProcessingResult, cfg *config.Config) []string {
 	var lines []string
-	lines = append(lines, fmt.Sprintf("Camera: %s", frame.CameraID))
-	lines = append(lines, fmt.Sprintf("Frame: #%d", frame.FrameID))
-	lines = append(lines, fmt.Sprintf("Resolution: %dx%d", frame.Width, frame.Height))
-	if frame.FPS > 0 {
-		lines = append(lines, fmt.Sprintf("FPS: %.1f", frame.FPS))
-	} else {
-		lines = append(lines, "FPS: --.-")
+
+	show := func(flag bool) bool { return cfg == nil || flag }
+
+	if show(cfg.ShowCameraID) {
+		lines = append(lines, fmt.Sprintf("Camera: %s", frame.CameraID))
 	}
-	lines = append(lines, fmt.Sprintf("Latency: %dms", frame.Latency.Milliseconds()))
-	aiStatus := "AI: Disabled"
-	if frame.AIEnabled {
-		if aiResult != nil && aiResult.FrameProcessed {
-			detectionCount := len(aiResult.Detections)
-			aiStatus = fmt.Sprintf("AI: Active (%d detections)", detectionCount)
-			if aiResult.ProcessingTime > 0 {
-				lines = append(lines, fmt.Sprintf("AI Time: %dms", aiResult.ProcessingTime.Milliseconds()))
-			}
-			for project, count := range aiResult.ProjectResults {
-				if count > 0 {
-					lines = append(lines, fmt.Sprintf("%s: %d", project, count))
-				}
-			}
+	if show(cfg.ShowFrameID) {
+		lines = append(lines, fmt.Sprintf("Frame: #%d", frame.FrameID))
+	}
+	if show(cfg.ShowResolution) {
+		lines = append(lines, fmt.Sprintf("Resolution: %dx%d", frame.Width, frame.Height))
+	}
+	if show(cfg.ShowFPS) {
+		if frame.FPS > 0 {
+			lines = append(lines, fmt.Sprintf("FPS: %.1f", frame.FPS))
 		} else {
-			aiStatus = "AI: Enabled"
-			if aiResult != nil && aiResult.ErrorMessage != "" {
-				aiStatus = "AI: Error"
-			}
+			lines = append(lines, "FPS: --.-")
 		}
 	}
-	lines = append(lines, aiStatus)
-	lines = append(lines, fmt.Sprintf("Time: %s", frame.Timestamp.Format("15:04:05")))
-	lines = append(lines, fmt.Sprintf("Quality: %d%%", frame.Quality))
-	if frame.Bitrate > 0 {
+	if show(cfg.ShowLatency) {
+		lines = append(lines, fmt.Sprintf("Latency: %dms", frame.Latency.Milliseconds()))
+	}
+
+	if frame.AIEnabled {
+		if show(cfg.ShowAIStatus) {
+			aiStatus := "AI: Enabled"
+			if aiResult != nil && aiResult.FrameProcessed {
+				if show(cfg.ShowAIDetectionsCount) {
+					aiStatus = fmt.Sprintf("AI: Active (%d detections)", len(aiResult.Detections))
+				} else {
+					aiStatus = "AI: Active"
+				}
+			} else if aiResult != nil && aiResult.ErrorMessage != "" {
+				aiStatus = "AI: Error"
+			}
+			lines = append(lines, aiStatus)
+		}
+
+		if aiResult != nil && aiResult.FrameProcessed {
+			if show(cfg.ShowAIProcessingTime) && aiResult.ProcessingTime > 0 {
+				lines = append(lines, fmt.Sprintf("AI Time: %dms", aiResult.ProcessingTime.Milliseconds()))
+			}
+			if show(cfg.ShowProjectCounts) {
+				for project, count := range aiResult.ProjectResults {
+					if count > 0 {
+						lines = append(lines, fmt.Sprintf("%s: %d", project, count))
+					}
+				}
+			}
+		}
+	} else if show(cfg.ShowAIStatus) {
+		lines = append(lines, "AI: Disabled")
+	}
+
+	if show(cfg.ShowTime) {
+		lines = append(lines, fmt.Sprintf("Time: %s", frame.Timestamp.Format("15:04:05")))
+	}
+	if show(cfg.ShowQuality) {
+		lines = append(lines, fmt.Sprintf("Quality: %d%%", frame.Quality))
+	}
+	if show(cfg.ShowBitrate) && frame.Bitrate > 0 {
 		lines = append(lines, fmt.Sprintf("Bitrate: %dkbps", frame.Bitrate))
 	}
+
 	return lines
 }
 
@@ -615,4 +666,38 @@ func min(a, b int) int {
 }
 func containsString(str, substr string) bool {
 	return len(str) >= len(substr) && str[:len(substr)] == substr || len(str) > len(substr) && str[len(str)-len(substr):] == substr || (len(str) > len(substr) && strings.Contains(str, substr))
+}
+
+// parseHexColor converts a color string like "#RRGGBB" to color.RGBA
+func parseHexColor(s string) (color.RGBA, error) {
+	var c color.RGBA
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "#") {
+		s = s[1:]
+	}
+	if len(s) != 6 {
+		return c, fmt.Errorf("invalid color length: %s", s)
+	}
+	r, err := strconv.ParseUint(s[0:2], 16, 8)
+	if err != nil {
+		return c, err
+	}
+	g, err := strconv.ParseUint(s[2:4], 16, 8)
+	if err != nil {
+		return c, err
+	}
+	b, err := strconv.ParseUint(s[4:6], 16, 8)
+	if err != nil {
+		return c, err
+	}
+	c = color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}
+	return c, nil
+}
+
+// isDarkColor determines if a color is considered dark using perceived luminance
+func isDarkColor(c color.RGBA) bool {
+	// sRGB luminance(Y) from RGB: 0.2126 R + 0.7152 G + 0.0722 B
+	luminance := 0.2126*float64(c.R) + 0.7152*float64(c.G) + 0.0722*float64(c.B)
+	// threshold ~128 for 0-255 range
+	return luminance < 128
 }

@@ -107,13 +107,21 @@ type Config struct {
 	SwaggerPort int
 
 	// Metadata Overlay
-	ShowFPS      bool
-	ShowLatency  bool
-	ShowCameraID bool
-	ShowAIStatus bool
-	ShowMetadata bool
-	OverlayColor string
-	OverlayFont  int
+	ShowFPS               bool
+	ShowLatency           bool
+	ShowCameraID          bool
+	ShowAIStatus          bool
+	ShowMetadata          bool
+	ShowFrameID           bool
+	ShowResolution        bool
+	ShowTime              bool
+	ShowQuality           bool
+	ShowBitrate           bool
+	ShowAIDetectionsCount bool
+	ShowAIProcessingTime  bool
+	ShowProjectCounts     bool
+	OverlayColor          string
+	OverlayFont           int
 
 	// WebRTC Configuration
 	WebRTCICEServers []string
@@ -231,13 +239,21 @@ func Load() *Config {
 		SwaggerPort: getEnvInt("SWAGGER_PORT", 8000),
 
 		// Metadata Overlay
-		ShowFPS:      getEnvBool("SHOW_FPS", true),
-		ShowLatency:  getEnvBool("SHOW_LATENCY", false),
-		ShowCameraID: getEnvBool("SHOW_CAMERA_ID", true),
-		ShowAIStatus: getEnvBool("SHOW_AI_STATUS", false),
-		ShowMetadata: getEnvBool("SHOW_METADATA", true),
-		OverlayColor: getEnv("OVERLAY_COLOR", "#FF0000"),
-		OverlayFont:  getEnvInt("OVERLAY_FONT", 2),
+		ShowFPS:               getEnvBool("SHOW_FPS", true),
+		ShowLatency:           getEnvBool("SHOW_LATENCY", true),
+		ShowCameraID:          getEnvBool("SHOW_CAMERA_ID", true),
+		ShowAIStatus:          getEnvBool("SHOW_AI_STATUS", true),
+		ShowMetadata:          getEnvBool("SHOW_METADATA", true),
+		ShowFrameID:           getEnvBool("SHOW_FRAME_ID", true),
+		ShowResolution:        getEnvBool("SHOW_RESOLUTION", true),
+		ShowTime:              getEnvBool("SHOW_TIME", true),
+		ShowQuality:           getEnvBool("SHOW_QUALITY", true),
+		ShowBitrate:           getEnvBool("SHOW_BITRATE", true),
+		ShowAIDetectionsCount: getEnvBool("SHOW_AI_DETECTIONS_COUNT", true),
+		ShowAIProcessingTime:  getEnvBool("SHOW_AI_PROCESSING_TIME", true),
+		ShowProjectCounts:     getEnvBool("SHOW_PROJECT_COUNTS", true),
+		OverlayColor:          getEnv("OVERLAY_COLOR", "#FF0000"),
+		OverlayFont:           getEnvInt("OVERLAY_FONT", 2),
 
 		// WebRTC Configuration
 		WebRTCICEServers: []string{

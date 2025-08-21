@@ -135,11 +135,11 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 			continue
 		}
 
-		// Create a frame-level cooldown key instead of track-level
+		// Use a stable per-camera/project/type cooldown key to throttle alerts across frames
 		cooldownKey := models.AlertCooldownKey{
 			CameraID:    cameraID,
 			ProjectName: primaryDetection.ProjectName,
-			TrackID:     fmt.Sprintf("frame_%d_%s", frameMetadata.FrameID, string(s.getDetectionType(primaryDetection.ProjectName, primaryDetection.Label))),
+			TrackID:     fmt.Sprintf("type_%s", string(s.getDetectionType(primaryDetection.ProjectName, primaryDetection.Label))),
 		}
 
 		if !s.CheckCooldown(cooldownKey, decision.CooldownType) {
