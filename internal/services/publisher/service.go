@@ -21,27 +21,18 @@ import (
 	"kepler-worker-go/internal/models"
 )
 
-// PublishMethod defines the publishing method to MediaMTX
-type PublishMethod string
-
-const (
-	PublishMethodSRT    PublishMethod = "srt"
-	PublishMethodWebRTC PublishMethod = "webrtc"
-)
+// WebRTC-only publisher
 
 // Service handles publishing video streams to external media servers
 type Service struct {
 	cfg *config.Config
 
-	// MediaMTX streams per camera (SRT or WebRTC)
+	// MediaMTX streams per camera
 	streamMutex sync.RWMutex
 	streams     map[string]*MediaMTXStream
-
-	// Publishing method configuration
-	publishMethod PublishMethod
 }
 
-// MediaMTXStream represents an ultra-low latency stream to MediaMTX (SRT or WebRTC)
+// MediaMTXStream represents an ultra-low latency stream to MediaMTX (WebRTC)
 type MediaMTXStream struct {
 	cameraID    string
 	process     *exec.Cmd
@@ -50,9 +41,6 @@ type MediaMTXStream struct {
 	frameBuffer chan *models.ProcessedFrame
 	isRunning   bool
 	stopChannel chan struct{}
-
-	// Publishing method for this stream
-	method PublishMethod
 
 	// WebRTC WHIP specific fields
 	whipURL      string
@@ -69,29 +57,15 @@ type MediaMTXStream struct {
 	droppedFrames int64
 }
 
-// NewService creates a new publisher service with default SRT method
+// NewService creates a new publisher service (WebRTC)
 func NewService(cfg *config.Config) (*Service, error) {
-	return NewServiceWithMethod(cfg, PublishMethodSRT)
-}
-
-// NewServiceWithMethod creates a new publisher service with specified method
-func NewServiceWithMethod(cfg *config.Config, method PublishMethod) (*Service, error) {
 	service := &Service{
-		cfg:           cfg,
-		streams:       make(map[string]*MediaMTXStream),
-		publishMethod: method,
+		cfg:     cfg,
+		streams: make(map[string]*MediaMTXStream),
 	}
-
-	methodName := "SRT"
-	if method == PublishMethodWebRTC {
-		methodName = "WebRTC WHIP"
-	}
-
 	log.Info().
 		Str("mediamtx_url", cfg.MediaMTXURL).
-		Str("publish_method", string(method)).
-		Msgf("Ultra-low latency %s Publisher service initialized with MediaMTX", methodName)
-
+		Msg("Ultra-low latency WebRTC Publisher service initialized with MediaMTX")
 	return service, nil
 }
 
@@ -127,111 +101,13 @@ func (s *Service) getOrCreateMediaMTXStream(cameraID string, width, height int) 
 		return stream, nil
 	}
 
-	// Create new MediaMTX stream based on configured method
-	stream, err := s.createMediaMTXStream(cameraID, width, height)
+	// Create new MediaMTX WebRTC stream
+	stream, err := s.createWebRTCStream(cameraID, width, height)
 	if err != nil {
 		return nil, err
 	}
 
 	s.streams[cameraID] = stream
-	return stream, nil
-}
-
-func (s *Service) createMediaMTXStream(cameraID string, width, height int) (*MediaMTXStream, error) {
-	switch s.publishMethod {
-	case PublishMethodSRT:
-		return s.createSRTStream(cameraID, width, height)
-	case PublishMethodWebRTC:
-		return s.createWebRTCStream(cameraID, width, height)
-	default:
-		return nil, fmt.Errorf("unsupported publish method: %s", s.publishMethod)
-	}
-}
-
-func (s *Service) createSRTStream(cameraID string, width, height int) (*MediaMTXStream, error) {
-	// MediaMTX SRT publish URL
-	srtURL := fmt.Sprintf("srt://localhost:8890?pkt_size=1316&latency=40&streamid=#!::r=live/%s,m=publish", cameraID)
-
-	// Ultra-low latency FFmpeg command with SRT - optimized for WebRTC
-	args := []string{
-		"-f", "rawvideo",
-		"-pix_fmt", "bgr24",
-		"-s", "640x480", // Better resolution for WebRTC
-		"-r", "15", // Higher frame rate for smoother WebRTC
-		"-i", "-", // Read from stdin
-		"-c:v", "libx264",
-		"-preset", "ultrafast", // Fastest encoding for low latency
-		"-tune", "zerolatency",
-		"-profile:v", "baseline",
-		"-level", "3.1",
-		"-pix_fmt", "yuv420p",
-		"-g", "15", // GOP of 15 (1 second at 15 FPS)
-		"-keyint_min", "15",
-		"-sc_threshold", "0",
-		"-b:v", "500k", // Higher bitrate for better quality
-		"-maxrate", "750k",
-		"-bufsize", "250k", // Smaller buffer for lower latency
-		"-rc-lookahead", "0",
-		"-threads", "2",
-		"-flags", "+global_header",
-		"-avoid_negative_ts", "make_zero",
-		"-flush_packets", "1",
-		"-fflags", "nobuffer+genpts+flush_packets",
-		"-muxdelay", "0",
-		"-muxpreload", "0",
-		"-mpegts_flags", "resend_headers+initial_discontinuity",
-		"-max_delay", "0",
-		"-f", "mpegts", // Use MPEG-TS for SRT
-		"-loglevel", "error",
-		srtURL,
-	}
-
-	process := exec.Command("ffmpeg", args...)
-
-	stdin, err := process.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
-	}
-
-	if err := process.Start(); err != nil {
-		stdin.Close()
-		return nil, fmt.Errorf("failed to start FFmpeg ultra-low latency SRT stream: %w", err)
-	}
-
-	// Ultra-low latency timing
-	targetFPS := 15.0
-	frameInterval := time.Duration(float64(time.Second) / targetFPS)
-
-	stream := &MediaMTXStream{
-		cameraID:      cameraID,
-		process:       process,
-		stdin:         stdin,
-		frameBuffer:   make(chan *models.ProcessedFrame, 1), // Single frame buffer
-		isRunning:     true,
-		stopChannel:   make(chan struct{}),
-		method:        PublishMethodSRT,
-		targetFPS:     targetFPS,
-		frameInterval: frameInterval,
-		lastFrameTime: time.Now(),
-	}
-
-	// Start frame processing goroutine
-	go s.processMediaMTXFrames(stream)
-
-	// Get all stream URLs for this camera
-	rtspURL := s.GetRTSPURL(cameraID)
-	webrtcURL := s.GetWebRTCURL(cameraID)
-	hlsURL := s.GetHLSURL(cameraID)
-
-	log.Info().
-		Str("camera_id", cameraID).
-		Str("srt_publish_url", srtURL).
-		Str("rtsp_url", rtspURL).
-		Str("webrtc_view_url", webrtcURL).
-		Str("hls_url", hlsURL).
-		Float64("target_fps", targetFPS).
-		Msg("Ultra-low latency SRT stream started - 640x480@15FPS optimized for WebRTC")
-
 	return stream, nil
 }
 
@@ -302,24 +178,23 @@ func (s *Service) createWebRTCStream(cameraID string, width, height int) (*Media
 	}
 	whipResource := resp.Header.Get("Location")
 
-	// FFmpeg: raw BGR24 -> VP8 (IVF) on stdout
+	// FFmpeg: raw BGR24 -> VP8 (IVF) on stdout (minimal args, config-driven)
+	sizeArg := fmt.Sprintf("%dx%d", s.cfg.OutputWidth, s.cfg.OutputHeight)
+	fps := s.cfg.PublishingFPS
+	if fps <= 0 {
+		fps = 15
+	}
+	bitrateArg := fmt.Sprintf("%dk", s.cfg.OutputBitrate)
 	args := []string{
 		"-f", "rawvideo",
 		"-pix_fmt", "bgr24",
-		"-s", "640x480",
-		"-r", "15",
+		"-s", sizeArg,
+		"-r", fmt.Sprintf("%d", fps),
 		"-i", "-",
 		"-c:v", "libvpx",
 		"-deadline", "realtime",
 		"-cpu-used", "8",
-		"-error-resilient", "1",
-		"-lag-in-frames", "0",
-		"-g", "15",
-		"-keyint_min", "15",
-		"-b:v", "750k",
-		"-maxrate", "1000k",
-		"-bufsize", "375k",
-		"-threads", "2",
+		"-b:v", bitrateArg,
 		"-f", "ivf",
 		"-loglevel", "error",
 		"pipe:1",
@@ -342,7 +217,7 @@ func (s *Service) createWebRTCStream(cameraID string, width, height int) (*Media
 		return nil, fmt.Errorf("failed to start FFmpeg WebRTC encoder: %w", err)
 	}
 
-	targetFPS := 15.0
+	targetFPS := float64(fps)
 	frameInterval := time.Duration(float64(time.Second) / targetFPS)
 
 	stream := &MediaMTXStream{
@@ -353,7 +228,6 @@ func (s *Service) createWebRTCStream(cameraID string, width, height int) (*Media
 		frameBuffer:   make(chan *models.ProcessedFrame, 1),
 		isRunning:     true,
 		stopChannel:   make(chan struct{}),
-		method:        PublishMethodWebRTC,
 		whipURL:       whipURL,
 		whipClient:    whipClient,
 		whipResource:  whipResource,
@@ -380,7 +254,7 @@ func (s *Service) createWebRTCStream(cameraID string, width, height int) (*Media
 		Str("webrtc_view_url", webrtcURL).
 		Str("hls_url", hlsURL).
 		Float64("target_fps", targetFPS).
-		Msg("Ultra-low latency WebRTC WHIP stream started - 640x480@15FPS via VP8/WHIP")
+		Msg("Ultra-low latency WebRTC WHIP stream started")
 
 	return stream, nil
 }
@@ -404,14 +278,12 @@ func (s *Service) processMediaMTXFrames(stream *MediaMTXStream) {
 		}
 
 		// Cleanup WebRTC/WHIP
-		if stream.method == PublishMethodWebRTC {
-			if stream.pc != nil {
-				_ = stream.pc.Close()
-			}
-			if stream.whipResource != "" && stream.whipClient != nil {
-				req, _ := http.NewRequest(http.MethodDelete, stream.whipResource, nil)
-				_, _ = stream.whipClient.Do(req)
-			}
+		if stream.pc != nil {
+			_ = stream.pc.Close()
+		}
+		if stream.whipResource != "" && stream.whipClient != nil {
+			req, _ := http.NewRequest(http.MethodDelete, stream.whipResource, nil)
+			_, _ = stream.whipClient.Do(req)
 		}
 
 		// Remove from streams map
@@ -439,7 +311,6 @@ func (s *Service) processMediaMTXFrames(stream *MediaMTXStream) {
 			var latestFrame *models.ProcessedFrame
 			framesDrained := 0
 
-		drainLoop:
 			for {
 				select {
 				case frame := <-stream.frameBuffer:
@@ -448,9 +319,10 @@ func (s *Service) processMediaMTXFrames(stream *MediaMTXStream) {
 					}
 					latestFrame = frame
 				default:
-					break drainLoop
+					goto drained
 				}
 			}
+		drained:
 
 			if framesDrained > 0 {
 				stream.droppedFrames += int64(framesDrained)
@@ -470,7 +342,7 @@ func (s *Service) processMediaMTXFrames(stream *MediaMTXStream) {
 				continue
 			}
 
-			// Resize frame to 640x480 for optimized encoder quality
+			// Resize frame to configured output size for optimized encoder quality
 			resizedData, err := s.resizeFrameToStandard(latestFrame.Data, latestFrame.Width, latestFrame.Height)
 			if err != nil {
 				log.Error().
@@ -492,29 +364,29 @@ func (s *Service) processMediaMTXFrames(stream *MediaMTXStream) {
 			stream.frameCount++
 
 			// Log stats occasionally
-			if stream.frameCount%20 == 0 {
-				elapsed := time.Since(stream.lastFrameTime)
-				actualFPS := 0.0
-				if elapsed.Seconds() > 0 {
-					actualFPS = stream.targetFPS / elapsed.Seconds()
-				}
-				stream.lastFrameTime = time.Now()
+			// if stream.frameCount%20 == 0 {
+			// 	elapsed := time.Since(stream.lastFrameTime)
+			// 	actualFPS := 0.0
+			// 	if elapsed.Seconds() > 0 {
+			// 		actualFPS = stream.targetFPS / elapsed.Seconds()
+			// 	}
+			// 	stream.lastFrameTime = time.Now()
 
-				log.Info().
-					Str("camera_id", stream.cameraID).
-					Int64("frame_count", stream.frameCount).
-					Int64("dropped_frames", stream.droppedFrames).
-					Float64("actual_fps", actualFPS).
-					Float64("target_fps", stream.targetFPS).
-					Msg("Ultra-low latency SRT streaming stats")
-			}
+			// 	log.Info().
+			// 		Str("camera_id", stream.cameraID).
+			// 		Int64("frame_count", stream.frameCount).
+			// 		Int64("dropped_frames", stream.droppedFrames).
+			// 		Float64("actual_fps", actualFPS).
+			// 		Float64("target_fps", stream.targetFPS).
+			// 		Msg("Ultra-low latency streaming stats")
+			// }
 		}
 	}
 }
 
 // readIVFAndPublish reads IVF frames from ffmpeg stdout and publishes them to the WebRTC track
 func (s *Service) readIVFAndPublish(stream *MediaMTXStream) {
-	if stream.method != PublishMethodWebRTC || stream.stdout == nil || stream.videoTrack == nil {
+	if stream.stdout == nil || stream.videoTrack == nil {
 		return
 	}
 
@@ -560,15 +432,21 @@ func (s *Service) readIVFAndPublish(stream *MediaMTXStream) {
 	}
 }
 
-// resizeFrameToStandard resizes any frame to 640x480 BGR format
+// resizeFrameToStandard resizes any frame to configured BGR format (default 640x480)
 func (s *Service) resizeFrameToStandard(data []byte, width, height int) ([]byte, error) {
 	if len(data) != width*height*3 {
 		return nil, fmt.Errorf("invalid frame data size: expected %d, got %d", width*height*3, len(data))
 	}
 
-	// Target size: 640x480 (optimized for WebRTC)
-	targetWidth := 640
-	targetHeight := 480
+	// Target size from config (fallback to 640x480)
+	targetWidth := s.cfg.OutputWidth
+	if targetWidth <= 0 {
+		targetWidth = 640
+	}
+	targetHeight := s.cfg.OutputHeight
+	if targetHeight <= 0 {
+		targetHeight = 480
+	}
 
 	// If already correct size, return as-is
 	if width == targetWidth && height == targetHeight {
@@ -576,7 +454,6 @@ func (s *Service) resizeFrameToStandard(data []byte, width, height int) ([]byte,
 	}
 
 	// Simple byte-level downsampling (basic but fast)
-	// This is a quick implementation - could be optimized further
 	resizedData := make([]byte, targetWidth*targetHeight*3)
 
 	scaleX := float64(width) / float64(targetWidth)
@@ -635,14 +512,12 @@ func (s *Service) StopStream(cameraID string) error {
 	}
 
 	// Cleanup WebRTC/WHIP
-	if stream.method == PublishMethodWebRTC {
-		if stream.pc != nil {
-			_ = stream.pc.Close()
-		}
-		if stream.whipResource != "" && stream.whipClient != nil {
-			req, _ := http.NewRequest(http.MethodDelete, stream.whipResource, nil)
-			_, _ = stream.whipClient.Do(req)
-		}
+	if stream.pc != nil {
+		_ = stream.pc.Close()
+	}
+	if stream.whipResource != "" && stream.whipClient != nil {
+		req, _ := http.NewRequest(http.MethodDelete, stream.whipResource, nil)
+		_, _ = stream.whipClient.Do(req)
 	}
 
 	delete(s.streams, cameraID)
@@ -710,11 +585,6 @@ func (s *Service) GetWebRTCPublishURL(cameraID string) string {
 // GetHLSURL returns the MediaMTX HLS URL for a camera
 func (s *Service) GetHLSURL(cameraID string) string {
 	return fmt.Sprintf("%s/live/%s/hls", s.cfg.MediaMTXURL, cameraID)
-}
-
-// NewWebRTCService creates a publisher service specifically for WebRTC WHIP
-func NewWebRTCService(cfg *config.Config) (*Service, error) {
-	return NewServiceWithMethod(cfg, PublishMethodWebRTC)
 }
 
 // GetRTSPURL returns the MediaMTX RTSP URL for a camera

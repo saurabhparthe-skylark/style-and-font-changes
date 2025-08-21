@@ -94,6 +94,9 @@ type Config struct {
 	OutputQuality int
 	OutputBitrate int
 
+	// Publishing
+	PublishingFPS int
+
 	// MediaMTX Publishing
 	WHIPTimeout   time.Duration
 	HLSSegments   int
@@ -214,6 +217,9 @@ func Load() *Config {
 		OutputHeight:  getEnvInt("OUTPUT_HEIGHT", 720),
 		OutputQuality: getEnvInt("OUTPUT_QUALITY", 75),
 		OutputBitrate: getEnvInt("OUTPUT_BITRATE", 2000),
+
+		// Publishing
+		PublishingFPS: getEnvInt("PUBLISHING_FPS", 30),
 
 		// MediaMTX Publishing
 		WHIPTimeout:   getEnvDuration("WHIP_TIMEOUT", 10*time.Second),

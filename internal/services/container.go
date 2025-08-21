@@ -31,7 +31,7 @@ func NewServiceContainer(cfg *config.Config) (*ServiceContainer, error) {
 	}
 
 	// Initialize publisher service (MediaMTX)
-	publisherSvc, err := publisher.NewWebRTCService(cfg)
+	publisherSvc, err := publisher.NewService(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize publisher service: %w", err)
 	}

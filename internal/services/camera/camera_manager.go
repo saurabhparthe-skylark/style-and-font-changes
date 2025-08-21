@@ -151,9 +151,9 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		StopChannel:     make(chan struct{}),
 
 		// Generate MediaMTX URLs
-		RTSPUrl:   fmt.Sprintf("rtsp://localhost:8554/%s", req.CameraID),
-		WebRTCUrl: fmt.Sprintf("http://localhost:8889/%s/whep", req.CameraID),
-		HLSUrl:    fmt.Sprintf("http://localhost:8888/%s/index.m3u8", req.CameraID),
+		RTSPUrl:   cm.publisherSvc.GetRTSPURL(req.CameraID),
+		WebRTCUrl: cm.publisherSvc.GetWebRTCURL(req.CameraID),
+		HLSUrl:    cm.publisherSvc.GetHLSURL(req.CameraID),
 		MJPEGUrl:  fmt.Sprintf("http://localhost:%d/mjpeg/%s", cm.cfg.Port, req.CameraID),
 	}
 

@@ -79,11 +79,24 @@ func startServer(server *api.Server) {
 }
 
 func waitForShutdown(cfg *config.Config, server *api.Server) {
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	quit := make(chan os.Signal, 2)
+	signal.Notify(quit,
+		syscall.SIGINT,  // Ctrl+C
+		syscall.SIGTERM, // Docker/K8s stop
+		syscall.SIGQUIT, // Quit
+		syscall.SIGHUP,  // Hangup/terminal closed
+		syscall.SIGTSTP, // Ctrl+Z - treat as graceful shutdown
+	)
 
-	log.Info().Msg("Shutdown signal received")
+	// If a second signal arrives, force exit immediately
+	go func() {
+		sig := <-quit
+		log.Warn().Str("signal", sig.String()).Msg("Second signal received, forcing exit")
+		os.Exit(1)
+	}()
+
+	sig := <-quit
+	log.Info().Str("signal", sig.String()).Msg("Shutdown signal received")
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
@@ -93,4 +106,7 @@ func waitForShutdown(cfg *config.Config, server *api.Server) {
 	} else {
 		log.Info().Msg("Server shutdown complete")
 	}
+
+	// Ensure process exits even if something lingers
+	os.Exit(0)
 }
