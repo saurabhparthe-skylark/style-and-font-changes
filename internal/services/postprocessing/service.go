@@ -230,6 +230,10 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 		return alerts.HandleFireSmokeDetection(detection, decision)
 
 	case models.DetectionTypeGeneral:
+		// Intrusion flag can be present on general/person detections
+		if detection.IsIntrusion != nil && *detection.IsIntrusion {
+			return alerts.HandleIntrusionDetection(detection, decision)
+		}
 		return alerts.HandleGeneralDetection(detection, decision)
 
 	default:

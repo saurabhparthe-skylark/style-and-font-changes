@@ -12,32 +12,64 @@ import (
 
 // HandlePPEDetection handles PPE detection alerts
 func HandlePPEDetection(detection models.Detection, decision models.AlertDecision) models.AlertDecision {
-	// PPE alerts are only created for persons with violations and send_alert=true
-	if !detection.SendAlert {
-		log.Info().
-			Int32("track_id", detection.TrackID).
-			Msg("PPE detection: send_alert=false, no alert created")
-		return decision
+	// Build violations from available fields if missing
+	violations := append([]string{}, detection.Violations...)
+
+	// Derive violations from has_* flags when present
+	if detection.HasVest != nil && !*detection.HasVest {
+		violations = append(violations, "vest violation")
+	}
+	if detection.HasHelmet != nil && !*detection.HasHelmet {
+		violations = append(violations, "helmet violation")
+	}
+	if detection.HasGloves != nil && !*detection.HasGloves {
+		violations = append(violations, "gloves violation")
+	}
+	if detection.HasGlasses != nil && !*detection.HasGlasses {
+		violations = append(violations, "glasses violation")
 	}
 
-	if len(detection.Violations) == 0 {
+	// Include any ppe_items passed from AI directly
+	if len(detection.PPEItems) > 0 {
+		for _, item := range detection.PPEItems {
+			lower := strings.ToLower(item)
+			if strings.Contains(lower, "no_") || strings.Contains(lower, "missing") || strings.Contains(lower, "violation") {
+				violations = append(violations, item)
+			}
+		}
+	}
+
+	// Compliance flag: treat non-compliant as violation trigger
+	if detection.Compliance != nil {
+		comp := strings.ToLower(strings.TrimSpace(*detection.Compliance))
+		if comp == "non_compliant" || comp == "noncompliant" || strings.Contains(comp, "violation") {
+			if len(violations) == 0 {
+				violations = append(violations, "ppe non-compliance")
+			}
+		}
+	}
+
+	if len(violations) == 0 {
 		return decision
 	}
 
 	decision.ShouldAlert = true
 	decision.AlertType = models.AlertTypePPEViolation
 	decision.Severity = models.AlertSeverityHigh
-	decision.Title = CreatePPETitle(detection.Violations)
-	decision.Description = CreatePPEDescription(detection)
-	decision.Metadata["ppe_violations"] = detection.Violations
+	decision.Title = CreatePPETitle(violations)
+	// Overwrite detection.Violations in description build context without mutating input
+	temp := detection
+	temp.Violations = violations
+	decision.Description = CreatePPEDescription(temp)
+	decision.Metadata["ppe_violations"] = violations
 	decision.Metadata["ppe_compliance"] = detection.Compliance
-	decision.Metadata["violation_count"] = len(detection.Violations)
+	decision.Metadata["violation_count"] = len(violations)
 
 	log.Info().
 		Int32("track_id", detection.TrackID).
-		Int("violation_count", len(detection.Violations)).
-		Strs("violations", detection.Violations).
-		Msg("PPE violation alert will be created")
+		Int("violation_count", len(violations)).
+		Strs("violations", violations).
+		Msg("PPE violation alert will be created (derived)")
 
 	return decision
 }
@@ -174,9 +206,13 @@ func BuildConsolidatedPPEAlert(detections []models.Detection, cameraID string, r
 	// Add context image using annotated frame (shows full scene with overlays)
 	helpers.AddContextImage(&payload, annotatedFrame, cameraID, primaryDetection.TrackID, "Consolidated PPE alert")
 
-	// Add detection images for ALL detections using raw frame (clean crops without overlays)
+	// Add detection images: primary from annotated (with overlays), others from raw (clean)
 	for i, detection := range detections {
-		helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID,
+		frameForCrop := rawFrame
+		if detection.TrackID == primaryDetection.TrackID {
+			frameForCrop = annotatedFrame
+		}
+		helpers.AddDetectionImage(&payload, detection, frameForCrop, cameraID,
 			fmt.Sprintf("ppe_consolidated_%d_%d", detection.TrackID, i),
 			map[string]interface{}{
 				"alert_type":       decision.AlertType,

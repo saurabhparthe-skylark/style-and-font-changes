@@ -39,6 +39,7 @@ const (
 	AlertTypeAnomalyDetection AlertType = "ANOMALY_DETECTION"
 	AlertTypeSelfLearned      AlertType = "SELF_LEARNED_DETECTION"
 	AlertTypeHighConfidence   AlertType = "HIGH_CONFIDENCE_DETECTION"
+	AlertTypeIntrusion        AlertType = "INTRUSION_DETECTION"
 )
 
 // AlertSeverity represents the severity level of alerts

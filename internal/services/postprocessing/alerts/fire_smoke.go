@@ -15,9 +15,9 @@ func HandleFireSmokeDetection(detection models.Detection, decision models.AlertD
 	isFire := detection.IsFire != nil && *detection.IsFire
 	isSmoke := detection.IsSmoke != nil && *detection.IsSmoke
 
-	if !isFire && !isSmoke {
-		return decision
-	}
+	// if !isFire && !isSmoke {
+	// 	return decision
+	// }
 
 	decision.ShouldAlert = true
 	decision.AlertType = models.AlertTypeFireSmoke

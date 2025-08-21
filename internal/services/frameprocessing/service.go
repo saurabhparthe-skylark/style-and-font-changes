@@ -1,4 +1,4 @@
-package camera
+package frameprocessing
 
 import (
 	"context"
@@ -25,98 +25,64 @@ import (
 // FrameProcessor handles AI processing and metadata overlay
 type FrameProcessor struct {
 	cfg    *config.Config
-	camera *models.Camera // Per-camera configuration
+	camera *models.Camera
 
-	// Direct gRPC connection
 	grpcConn   *grpc.ClientConn
 	grpcClient pb.DetectionServiceClient
 	aiEndpoint string
 }
 
-// NewFrameProcessor creates a new frame processor
 func NewFrameProcessor(cfg *config.Config) (*FrameProcessor, error) {
-	return &FrameProcessor{
-		cfg: cfg,
-	}, nil
+	return &FrameProcessor{cfg: cfg}, nil
 }
 
-// NewFrameProcessorWithCamera creates a frame processor with per-camera AI configuration
 func NewFrameProcessorWithCamera(cfg *config.Config, camera *models.Camera) (*FrameProcessor, error) {
-	fp := &FrameProcessor{
-		cfg:    cfg,
-		camera: camera,
-	}
+	fp := &FrameProcessor{cfg: cfg, camera: camera}
 
-	// Initialize gRPC connection if AI is enabled
 	if camera != nil && camera.AIEnabled && camera.AIEndpoint != "" {
-		log.Info().
-			Str("camera_id", camera.ID).
-			Str("ai_endpoint", camera.AIEndpoint).
-			Bool("ai_enabled", camera.AIEnabled).
-			Msg("Initializing frame processor with AI enabled")
-
+		log.Info().Str("camera_id", camera.ID).Str("ai_endpoint", camera.AIEndpoint).Bool("ai_enabled", camera.AIEnabled).Msg("Initializing frame processor with AI enabled")
 		if err := fp.initGRPCConnection(camera.AIEndpoint); err != nil {
-			log.Error().Err(err).
-				Str("camera_id", camera.ID).
-				Str("ai_endpoint", camera.AIEndpoint).
-				Msg("Failed to initialize AI gRPC connection - AI will be disabled for this camera")
+			log.Error().Err(err).Str("camera_id", camera.ID).Str("ai_endpoint", camera.AIEndpoint).Msg("Failed to initialize AI gRPC connection - AI will be disabled for this camera")
 		} else {
-			log.Info().
-				Str("camera_id", camera.ID).
-				Str("ai_endpoint", camera.AIEndpoint).
-				Msg("AI gRPC connection successfully established")
+			log.Info().Str("camera_id", camera.ID).Str("ai_endpoint", camera.AIEndpoint).Msg("AI gRPC connection successfully established")
 		}
 	} else {
-		log.Info().
-			Str("camera_id", func() string {
-				if camera != nil {
-					return camera.ID
-				}
-				return "unknown"
-			}()).
-			Bool("ai_enabled", camera != nil && camera.AIEnabled).
-			Str("ai_endpoint", func() string {
-				if camera != nil {
-					return camera.AIEndpoint
-				}
-				return ""
-			}()).
-			Msg("Frame processor created without AI (AI disabled or no endpoint)")
+		log.Info().Str("camera_id", func() string {
+			if camera != nil {
+				return camera.ID
+			}
+			return "unknown"
+		}()).Bool("ai_enabled", camera != nil && camera.AIEnabled).Str("ai_endpoint", func() string {
+			if camera != nil {
+				return camera.AIEndpoint
+			}
+			return ""
+		}()).Msg("Frame processor created without AI (AI disabled or no endpoint)")
 	}
 
 	return fp, nil
 }
 
-// initGRPCConnection establishes connection to AI server with support for both HTTP and HTTPS
 func (fp *FrameProcessor) initGRPCConnection(endpoint string) error {
 	if fp.grpcConn != nil && fp.aiEndpoint == endpoint {
-		return nil // Already connected to this endpoint
+		return nil
 	}
-
-	// Close existing connection if different endpoint
 	if fp.grpcConn != nil {
 		fp.grpcConn.Close()
 	}
 
-	// Parse and normalize the endpoint
 	normalizedEndpoint, creds, err := fp.parseGRPCEndpoint(endpoint)
 	if err != nil {
 		return fmt.Errorf("failed to parse AI endpoint %s: %w", endpoint, err)
 	}
 
-	log.Info().
-		Str("original_endpoint", endpoint).
-		Str("normalized_endpoint", normalizedEndpoint).
-		Bool("use_tls", creds.Info().SecurityProtocol == "tls").
-		Msg("Connecting to AI gRPC service")
+	log.Info().Str("original_endpoint", endpoint).Str("normalized_endpoint", normalizedEndpoint).Bool("use_tls", creds.Info().SecurityProtocol == "tls").Msg("Connecting to AI gRPC service")
 
-	// Create gRPC connection with appropriate credentials
 	conn, err := grpc.NewClient(normalizedEndpoint, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return fmt.Errorf("failed to connect to AI service at %s: %w", normalizedEndpoint, err)
 	}
 
-	// Test connection with quick health check
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -129,53 +95,39 @@ func (fp *FrameProcessor) initGRPCConnection(endpoint string) error {
 	fp.grpcConn = conn
 	fp.grpcClient = client
 	fp.aiEndpoint = endpoint
-
-	log.Info().
-		Str("ai_endpoint", normalizedEndpoint).
-		Msg("AI gRPC connection successfully established")
+	log.Info().Str("ai_endpoint", normalizedEndpoint).Msg("AI gRPC connection successfully established")
 	return nil
 }
 
-// parseGRPCEndpoint parses and normalizes a gRPC endpoint, returning the normalized endpoint and appropriate credentials
 func (fp *FrameProcessor) parseGRPCEndpoint(endpoint string) (string, credentials.TransportCredentials, error) {
-	// Handle case where endpoint doesn't have a scheme
 	if !strings.Contains(endpoint, "://") {
-		// Check if it looks like a domain name (contains dots) vs IP:port
 		if strings.Contains(endpoint, ".") && !strings.Contains(endpoint, ":") {
-			// Domain without port, assume HTTPS gRPC on port 443
 			endpoint = "https://" + endpoint + ":443"
 		} else if strings.Contains(endpoint, ":") {
-			// Has port, check if it's a common secure port
 			parts := strings.Split(endpoint, ":")
 			if len(parts) == 2 {
 				if port, err := strconv.Atoi(parts[1]); err == nil {
-					// Common secure gRPC ports: 443, 8443, 9443
 					if port == 443 || port == 8443 || port == 9443 {
 						endpoint = "https://" + endpoint
 					} else {
 						endpoint = "http://" + endpoint
 					}
 				} else {
-					// Invalid port, default to HTTP
 					endpoint = "http://" + endpoint
 				}
 			}
 		} else {
-			// Just a hostname/IP, default to HTTPS with port 443
 			endpoint = "https://" + endpoint + ":443"
 		}
 	}
 
-	// Parse the URL
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return "", nil, fmt.Errorf("invalid endpoint URL: %w", err)
 	}
 
-	// Build the target address
 	host := u.Host
 	if u.Port() == "" {
-		// Add default ports if not specified
 		switch u.Scheme {
 		case "https":
 			host = u.Hostname() + ":443"
@@ -186,19 +138,12 @@ func (fp *FrameProcessor) parseGRPCEndpoint(endpoint string) (string, credential
 		}
 	}
 
-	// Create appropriate credentials
 	var creds credentials.TransportCredentials
 	switch u.Scheme {
 	case "https":
-		// Use TLS credentials for HTTPS
-		tlsConfig := &tls.Config{
-			ServerName: u.Hostname(),
-			// You can add more TLS configuration here if needed
-			// InsecureSkipVerify: false, // Set to true only for testing with self-signed certs
-		}
+		tlsConfig := &tls.Config{ServerName: u.Hostname()}
 		creds = credentials.NewTLS(tlsConfig)
 	case "http":
-		// Use insecure credentials for HTTP
 		creds = insecure.NewCredentials()
 	default:
 		return "", nil, fmt.Errorf("unsupported scheme: %s (supported: http, https)", u.Scheme)
@@ -207,7 +152,6 @@ func (fp *FrameProcessor) parseGRPCEndpoint(endpoint string) (string, credential
 	return host, creds, nil
 }
 
-// Shutdown closes gRPC connections
 func (fp *FrameProcessor) Shutdown() {
 	if fp.grpcConn != nil {
 		fp.grpcConn.Close()
@@ -216,12 +160,6 @@ func (fp *FrameProcessor) Shutdown() {
 	}
 }
 
-// OPTIMIZATION: Eliminated StandardizedDetection type and conversions
-// Frame processor now directly outputs models.Detection to avoid:
-// gRPC proto → StandardizedDetection → models.Detection (multiple conversions)
-// Now: gRPC proto → models.Detection (single conversion)
-
-// SolutionResults represents solution-specific results (e.g., people counter)
 type SolutionResults struct {
 	CurrentCount      int32 `json:"current_count"`
 	TotalCount        int32 `json:"total_count"`
@@ -231,35 +169,115 @@ type SolutionResults struct {
 	IntrusionDetected *bool `json:"intrusion_detected,omitempty"`
 }
 
-// AIProcessingResult contains the complete AI processing result for a frame
 type AIProcessingResult struct {
 	Detections     []models.Detection         `json:"detections"`
-	Solutions      map[string]SolutionResults `json:"solutions"` // project_name -> solution_name -> results
+	Solutions      map[string]SolutionResults `json:"solutions"`
 	ProcessingTime time.Duration              `json:"processing_time"`
 	ErrorMessage   string                     `json:"error_message,omitempty"`
 	FrameProcessed bool                       `json:"frame_processed"`
-	ProjectResults map[string]int             `json:"project_results"` // project_name -> detection_count
+	ProjectResults map[string]int             `json:"project_results"`
 }
 
-// ProcessFrame processes a raw frame through AI and adds metadata with enterprise-grade features
+// Overlay registry for per-project drawings
+type OverlayDrawer interface {
+	DrawDetections(mat *gocv.Mat, detections []models.Detection)
+	DrawSolutions(mat *gocv.Mat, solutions map[string]SolutionResults)
+}
+
+var overlayRegistry = map[string]OverlayDrawer{}
+
+func RegisterOverlay(project string, drawer OverlayDrawer) {
+	overlayRegistry[project] = drawer
+}
+
+func getOverlay(project string) OverlayDrawer {
+	if d, ok := overlayRegistry[project]; ok {
+		return d
+	}
+	return defaultOverlay{}
+}
+
+// Default overlay implementation
+type defaultOverlay struct{}
+
+func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detection) {
+	if mat == nil || len(detections) == 0 {
+		return
+	}
+	colors := map[string]color.RGBA{
+		"person":        {R: 0, G: 255, B: 0, A: 255},
+		"face":          {R: 255, G: 255, B: 0, A: 255},
+		"vehicle":       {R: 0, G: 165, B: 255, A: 255},
+		"car":           {R: 0, G: 140, B: 255, A: 255},
+		"truck":         {R: 0, G: 100, B: 255, A: 255},
+		"license_plate": {R: 255, G: 0, B: 255, A: 255},
+		"numberplate":   {R: 255, G: 0, B: 255, A: 255},
+		"default":       {R: 0, G: 0, B: 255, A: 255},
+	}
+	for _, det := range detections {
+		if det.IsSuppressed || det.TrueSuppressed {
+			continue
+		}
+		if len(det.BBox) != 4 {
+			continue
+		}
+		x1, y1, x2, y2 := int(det.BBox[0]), int(det.BBox[1]), int(det.BBox[2]), int(det.BBox[3])
+		width, height := mat.Cols(), mat.Rows()
+		x1 = max(0, min(width-2, x1))
+		y1 = max(0, min(height-2, y1))
+		x2 = max(x1+1, min(width-1, x2))
+		y2 = max(y1+1, min(height-1, y2))
+		detColor := colors["default"]
+		if c, exists := colors[det.Label]; exists {
+			detColor = c
+		}
+		if det.Score < 0.5 {
+			detColor.A = 128
+		}
+		gocv.Rectangle(mat, image.Rect(x1, y1, x2, y2), detColor, 2)
+		cornerLength := 15
+		cornerThickness := 3
+		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1+cornerLength, y1), detColor, cornerThickness)
+		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1, y1+cornerLength), detColor, cornerThickness)
+		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2-cornerLength, y1), detColor, cornerThickness)
+		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2, y1+cornerLength), detColor, cornerThickness)
+		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1+cornerLength, y2), detColor, cornerThickness)
+		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1, y2-cornerLength), detColor, cornerThickness)
+		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2-cornerLength, y2), detColor, cornerThickness)
+		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2, y2-cornerLength), detColor, cornerThickness)
+		labelText := formatDetectionLabel(det)
+		if labelText != "" {
+			drawLabelWithBackground(mat, labelText, x1, y1, detColor)
+		}
+	}
+}
+
+func (d defaultOverlay) DrawSolutions(mat *gocv.Mat, solutions map[string]SolutionResults) {
+	if mat == nil || len(solutions) == 0 {
+		return
+	}
+	y := 30
+	for solutionKey, solution := range solutions {
+		if containsString(solutionKey, "people_counter") {
+			drawPeopleCounterOverlay(mat, &y, solution)
+		}
+	}
+}
+
 func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []string, currentFPS float64, currentLatency time.Duration) *models.ProcessedFrame {
-	// Determine AI settings - use per-camera if available, otherwise fall back to global config
 	aiEnabled := fp.cfg.AIEnabled
 	aiTimeout := fp.cfg.AITimeout
 	aiFrameInterval := fp.cfg.AIFrameInterval
-
 	if fp.camera != nil {
 		aiEnabled = fp.camera.AIEnabled
 		aiTimeout = fp.camera.AITimeout
-		// Increment AI frame counter for this camera
 		fp.camera.AIFrameCounter++
 	}
 
-	// Create ProcessedFrame with current metadata
 	processedFrame := &models.ProcessedFrame{
 		CameraID:  rawFrame.CameraID,
-		Data:      rawFrame.Data, // Will be modified by addEnhancedStatsFrame (BGR format)
-		RawData:   rawFrame.Data, // Preserve original raw frame data for clean crops
+		Data:      rawFrame.Data,
+		RawData:   rawFrame.Data,
 		Timestamp: rawFrame.Timestamp,
 		FrameID:   rawFrame.FrameID,
 		Width:     rawFrame.Width,
@@ -271,160 +289,80 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 		Bitrate:   fp.cfg.OutputBitrate,
 	}
 
-	// Initialize AI result
-	aiResult := &AIProcessingResult{
-		Detections:     []models.Detection{},
-		Solutions:      make(map[string]SolutionResults),
-		ProjectResults: make(map[string]int),
-		FrameProcessed: false,
-	}
+	aiResult := &AIProcessingResult{Detections: []models.Detection{}, Solutions: make(map[string]SolutionResults), ProjectResults: make(map[string]int), FrameProcessed: false}
 
-	// Check if this frame should be processed by AI (Nth frame logic)
 	shouldProcessAI := aiEnabled && len(projects) > 0 && fp.grpcClient != nil
-
-	// Debug logging for AI processing decision
-	log.Debug().
-		Str("camera_id", rawFrame.CameraID).
-		Bool("ai_enabled", aiEnabled).
-		Int("projects_count", len(projects)).
-		Bool("grpc_client_available", fp.grpcClient != nil).
-		Bool("initial_should_process", shouldProcessAI).
-		Msg("AI processing decision check")
+	log.Debug().Str("camera_id", rawFrame.CameraID).Bool("ai_enabled", aiEnabled).Int("projects_count", len(projects)).Bool("grpc_client_available", fp.grpcClient != nil).Bool("initial_should_process", shouldProcessAI).Msg("AI processing decision check")
 
 	if shouldProcessAI {
 		if fp.camera != nil {
-			// Only process every Nth frame for AI when per-camera tracking is available
 			shouldProcessAI = (fp.camera.AIFrameCounter % int64(aiFrameInterval)) == 0
-
-			log.Debug().
-				Str("camera_id", rawFrame.CameraID).
-				Int64("ai_frame_counter", fp.camera.AIFrameCounter).
-				Int("ai_frame_interval", aiFrameInterval).
-				Bool("will_process_ai", shouldProcessAI).
-				Msg("ai_frame_interval_check")
+			log.Debug().Str("camera_id", rawFrame.CameraID).Int64("ai_frame_counter", fp.camera.AIFrameCounter).Int("ai_frame_interval", aiFrameInterval).Bool("will_process_ai", shouldProcessAI).Msg("ai_frame_interval_check")
 		} else {
-			// Fallback: when no per-camera context, use frame ID for interval
 			shouldProcessAI = (rawFrame.FrameID % int64(aiFrameInterval)) == 0
-
-			log.Debug().
-				Str("camera_id", rawFrame.CameraID).
-				Int64("frame_id", rawFrame.FrameID).
-				Int("ai_frame_interval", aiFrameInterval).
-				Bool("will_process_ai", shouldProcessAI).
-				Msg("ai_frame_interval_check")
+			log.Debug().Str("camera_id", rawFrame.CameraID).Int64("frame_id", rawFrame.FrameID).Int("ai_frame_interval", aiFrameInterval).Bool("will_process_ai", shouldProcessAI).Msg("ai_frame_interval_check")
 		}
 	} else {
-		log.Debug().
-			Str("camera_id", rawFrame.CameraID).
-			Bool("ai_enabled", aiEnabled).
-			Int("projects_count", len(projects)).
-			Bool("grpc_client_available", fp.grpcClient != nil).
-			Msg("AI processing skipped - conditions not met")
+		log.Debug().Str("camera_id", rawFrame.CameraID).Bool("ai_enabled", aiEnabled).Int("projects_count", len(projects)).Bool("grpc_client_available", fp.grpcClient != nil).Msg("AI processing skipped - conditions not met")
 	}
 
-	// Process with AI if conditions are met
 	if shouldProcessAI {
 		startTime := time.Now()
 		aiResult = fp.processFrameWithAI(rawFrame, projects, aiTimeout)
 		aiResult.ProcessingTime = time.Since(startTime)
-
-		log.Debug().
-			Str("camera_id", rawFrame.CameraID).
-			Int("detection_count", len(aiResult.Detections)).
-			Dur("processing_time", aiResult.ProcessingTime).
-			Bool("frame_processed", aiResult.FrameProcessed).
-			Int64("ai_frame_counter", func() int64 {
-				if fp.camera != nil {
-					return fp.camera.AIFrameCounter
-				}
-				return rawFrame.FrameID
-			}()).
-			Msg("ai_processing_completed")
+		log.Debug().Str("camera_id", rawFrame.CameraID).Int("detection_count", len(aiResult.Detections)).Dur("processing_time", aiResult.ProcessingTime).Bool("frame_processed", aiResult.FrameProcessed).Int64("ai_frame_counter", func() int64 {
+			if fp.camera != nil {
+				return fp.camera.AIFrameCounter
+			}
+			return rawFrame.FrameID
+		}()).Msg("ai_processing_completed")
 	}
 
-	// Set AI detections in processed frame
 	processedFrame.AIDetections = aiResult
-
-	// Add enhanced stats overlay to the frame
 	fp.addEnhancedStatsFrame(processedFrame, aiResult)
-
 	return processedFrame
 }
 
-// processFrameWithAI handles the complete AI processing pipeline
 func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects []string, aiTimeout time.Duration) *AIProcessingResult {
-	result := &AIProcessingResult{
-		Detections:     []models.Detection{},
-		Solutions:      make(map[string]SolutionResults),
-		ProjectResults: make(map[string]int),
-		FrameProcessed: false,
-	}
+	result := &AIProcessingResult{Detections: []models.Detection{}, Solutions: make(map[string]SolutionResults), ProjectResults: make(map[string]int), FrameProcessed: false}
 
-	// Create Mat from raw frame data for JPEG encoding
 	mat, err := gocv.NewMatFromBytes(rawFrame.Height, rawFrame.Width, gocv.MatTypeCV8UC3, rawFrame.Data)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("Failed to create Mat from frame data: %v", err)
-		log.Error().
-			Err(err).
-			Str("camera_id", rawFrame.CameraID).
-			Msg("ai_mat_from_bytes_failed")
+		log.Error().Err(err).Str("camera_id", rawFrame.CameraID).Msg("ai_mat_from_bytes_failed")
 		return result
 	}
 	defer mat.Close()
 
-	// Use high-quality JPEG encoding to minimize quality loss
-	// Set JPEG quality to 95% to maintain color fidelity
 	buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, mat, []int{gocv.IMWriteJpegQuality, 95})
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("Failed to encode frame as JPEG: %v", err)
-		log.Error().
-			Err(err).
-			Str("camera_id", rawFrame.CameraID).
-			Msg("ai_jpeg_encoding_failed")
+		log.Error().Err(err).Str("camera_id", rawFrame.CameraID).Msg("ai_jpeg_encoding_failed")
 		return result
 	}
 	defer buf.Close()
 
-	// Get JPEG bytes
 	jpegBytes := buf.GetBytes()
 
-	// Create gRPC request
-	req := &pb.FrameRequest{
-		Image:        jpegBytes,
-		CameraId:     rawFrame.CameraID,
-		ProjectNames: projects,
-	}
-
-	// Create context with timeout
+	req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: projects}
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
-	// Call AI service directly
 	resp, err := fp.grpcClient.InferDetection(ctx, req)
-
-	log.Debug().
-		Str("camera_id", rawFrame.CameraID).
-		Str("json_data", resp.String()).
-		Msg("AI response")
-
+	log.Debug().Str("camera_id", rawFrame.CameraID).Str("json_data", func() string {
+		if resp != nil {
+			return resp.String()
+		}
+		return ""
+	}()).Msg("AI response")
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("AI service call failed: %v", err)
-		log.Error().
-			Err(err).
-			Str("camera_id", rawFrame.CameraID).
-			Dur("timeout", aiTimeout).
-			Msg("ai_grpc_call_failed")
+		log.Error().Err(err).Str("camera_id", rawFrame.CameraID).Dur("timeout", aiTimeout).Msg("ai_grpc_call_failed")
 		return result
 	}
 
-	log.Debug().
-		Str("camera_id", rawFrame.CameraID).
-		Int("detection_count", len(result.Detections)).
-		Msg("ai_processing_completed")
-
 	result.FrameProcessed = true
 	fp.extractDetectionsFromResponse(resp, result)
-
 	return result
 }
 
@@ -432,10 +370,8 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 	if resp == nil || resp.Results == nil {
 		return
 	}
-
 	for projectName, projectDetections := range resp.Results {
 		projectCount := 0
-
 		for _, det := range projectDetections.GetPrimaryDetections() {
 			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelPrimary)
 			if modelDet != nil {
@@ -443,7 +379,6 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 				projectCount++
 			}
 		}
-
 		for _, det := range projectDetections.GetSecondaryDetections() {
 			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelSecondary)
 			if modelDet != nil {
@@ -451,7 +386,6 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 				projectCount++
 			}
 		}
-
 		for _, det := range projectDetections.GetTertiaryDetections() {
 			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelTertiary)
 			if modelDet != nil {
@@ -459,7 +393,6 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 				projectCount++
 			}
 		}
-
 		result.ProjectResults[projectName] = projectCount
 	}
 }
@@ -468,17 +401,14 @@ func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName st
 	if det == nil || len(det.Bbox) != 4 {
 		return nil
 	}
-
 	falseMatchID := det.GetFalseMatchId()
 	if falseMatchID == "None" || falseMatchID == "" {
 		falseMatchID = ""
 	}
-
 	trueMatchID := det.GetTrueMatchId()
 	if trueMatchID == "None" || trueMatchID == "" {
 		trueMatchID = ""
 	}
-
 	modelDet := &models.Detection{
 		TrackID:          det.GetTrackId(),
 		Score:            det.GetConfidence(),
@@ -490,7 +420,7 @@ func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName st
 		ProjectName:      projectName,
 		ParentID:         det.GetParentId(),
 		SendAlert:        det.GetSendAlert(),
-		IsRPN:            false, // Set based on detection logic if needed
+		IsRPN:            false,
 		FalseMatchID:     falseMatchID,
 		TrueMatchID:      trueMatchID,
 		IsSuppressed:     falseMatchID != "",
@@ -512,7 +442,6 @@ func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName st
 		RecognitionID:    det.RecognitionId,
 		RecognitionScore: det.RecognitionScore,
 	}
-
 	return modelDet
 }
 
@@ -525,121 +454,55 @@ func (fp *FrameProcessor) addEnhancedStatsFrame(processedFrame *models.Processed
 	defer mat.Close()
 
 	if aiResult != nil && len(aiResult.Detections) > 0 {
-		fp.drawDetections(&mat, aiResult.Detections)
+		// Group detections by project and apply per-project overlays
+		byProject := map[string][]models.Detection{}
+		for _, d := range aiResult.Detections {
+			byProject[d.ProjectName] = append(byProject[d.ProjectName], d)
+		}
+		for project, dets := range byProject {
+			drawer := getOverlay(project)
+			drawer.DrawDetections(&mat, dets)
+		}
 	}
 
 	if aiResult != nil && len(aiResult.Solutions) > 0 {
-		fp.drawSolutionOverlays(&mat, aiResult.Solutions)
+		// Global solutions overlay (or can be specialized later)
+		defaultOverlay{}.DrawSolutions(&mat, aiResult.Solutions)
 	}
 
-	fp.drawStatsOverlay(&mat, processedFrame, aiResult)
-
-	// Keep original behavior - output raw BGR bytes
-	// image_utils.go will handle the BGR->JPEG conversion safely
+	drawStatsOverlay(&mat, processedFrame, aiResult)
 	processedFrame.Data = mat.ToBytes()
 }
 
-func (fp *FrameProcessor) drawDetections(mat *gocv.Mat, detections []models.Detection) {
-	if mat == nil || len(detections) == 0 {
-		return
-	}
-
-	colors := map[string]color.RGBA{
-		"person":        {R: 0, G: 255, B: 0, A: 255},
-		"face":          {R: 255, G: 255, B: 0, A: 255},
-		"vehicle":       {R: 0, G: 165, B: 255, A: 255},
-		"car":           {R: 0, G: 140, B: 255, A: 255},
-		"truck":         {R: 0, G: 100, B: 255, A: 255},
-		"license_plate": {R: 255, G: 0, B: 255, A: 255},
-		"numberplate":   {R: 255, G: 0, B: 255, A: 255},
-		"default":       {R: 0, G: 0, B: 255, A: 255},
-	}
-
-	for _, det := range detections {
-		if det.IsSuppressed || det.TrueSuppressed {
-			continue
-		}
-
-		if len(det.BBox) != 4 {
-			continue
-		}
-
-		x1, y1, x2, y2 := int(det.BBox[0]), int(det.BBox[1]), int(det.BBox[2]), int(det.BBox[3])
-
-		width, height := mat.Cols(), mat.Rows()
-		x1 = max(0, min(width-2, x1))
-		y1 = max(0, min(height-2, y1))
-		x2 = max(x1+1, min(width-1, x2))
-		y2 = max(y1+1, min(height-1, y2))
-
-		detColor := colors["default"]
-		if c, exists := colors[det.Label]; exists {
-			detColor = c
-		}
-
-		if det.Score < 0.5 {
-			detColor.A = 128
-		}
-
-		gocv.Rectangle(mat, image.Rect(x1, y1, x2, y2), detColor, 2)
-
-		cornerLength := 15
-		cornerThickness := 3
-
-		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1+cornerLength, y1), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1, y1+cornerLength), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2-cornerLength, y1), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2, y1+cornerLength), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1+cornerLength, y2), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1, y2-cornerLength), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2-cornerLength, y2), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2, y2-cornerLength), detColor, cornerThickness)
-
-		labelText := fp.formatDetectionLabel(det)
-		if labelText != "" {
-			fp.drawLabelWithBackground(mat, labelText, x1, y1, detColor)
-		}
-	}
-}
-
-func (fp *FrameProcessor) formatDetectionLabel(det models.Detection) string {
+func formatDetectionLabel(det models.Detection) string {
 	label := fmt.Sprintf("%s %.2f", det.Label, det.Score)
-
 	if det.TrackID > 0 {
 		label += fmt.Sprintf(" ID:%d", det.TrackID)
 	}
-
 	if det.Compliance != nil {
 		label += fmt.Sprintf(" %s", *det.Compliance)
 	}
-
 	if det.Plate != nil && *det.Plate != "" {
 		label += fmt.Sprintf(" [%s]", *det.Plate)
 	}
-
 	if det.Gender != nil && *det.Gender != "" {
 		label += fmt.Sprintf(" %s", *det.Gender)
 	}
-
 	if len(det.Violations) > 0 {
 		label += " VIOLATION"
 	}
-
 	return label
 }
 
-func (fp *FrameProcessor) drawLabelWithBackground(mat *gocv.Mat, text string, x, y int, textColor color.RGBA) {
+func drawLabelWithBackground(mat *gocv.Mat, text string, x, y int, textColor color.RGBA) {
 	fontFace := gocv.FontHersheySimplex
 	fontScale := 0.6
 	thickness := 2
-
 	textSize := gocv.GetTextSize(text, fontFace, fontScale, thickness)
-
 	labelY := y - 10
 	if labelY < textSize.Y+5 {
 		labelY = y + textSize.Y + 10
 	}
-
 	labelX := x
 	if labelX+textSize.X > mat.Cols() {
 		labelX = mat.Cols() - textSize.X - 5
@@ -647,61 +510,38 @@ func (fp *FrameProcessor) drawLabelWithBackground(mat *gocv.Mat, text string, x,
 	if labelY+textSize.Y > mat.Rows() {
 		labelY = mat.Rows() - 5
 	}
-
 	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: 180}
-	gocv.Rectangle(mat,
-		image.Rect(labelX-2, labelY-textSize.Y-2, labelX+textSize.X+2, labelY+2),
-		bgColor, -1)
-
+	gocv.Rectangle(mat, image.Rect(labelX-2, labelY-textSize.Y-2, labelX+textSize.X+2, labelY+2), bgColor, -1)
 	whiteColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
-	gocv.PutText(mat, text, image.Pt(labelX, labelY), fontFace, fontScale, whiteColor, thickness)
+	gocv.PutText(mat, text, image.Pt(labelX, labelY), gocv.FontHersheySimplex, fontScale, whiteColor, thickness)
 }
 
-func (fp *FrameProcessor) drawSolutionOverlays(mat *gocv.Mat, solutions map[string]SolutionResults) {
-	if mat == nil || len(solutions) == 0 {
-		return
-	}
-
-	y := 30
-	for solutionKey, solution := range solutions {
-		if containsString(solutionKey, "people_counter") {
-			fp.drawPeopleCounterOverlay(mat, &y, solution)
-		}
-	}
-}
-
-func (fp *FrameProcessor) drawPeopleCounterOverlay(mat *gocv.Mat, y *int, solution SolutionResults) {
+func drawPeopleCounterOverlay(mat *gocv.Mat, y *int, solution SolutionResults) {
 	bgColor := color.RGBA{R: 0, G: 50, B: 150, A: 200}
 	gocv.Rectangle(mat, image.Rect(5, *y-25, 400, *y+60), bgColor, -1)
-
 	textColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
 	fontFace := gocv.FontHersheySimplex
 	fontScale := 0.8
-
 	gocv.PutText(mat, "People Counter", image.Pt(10, *y), fontFace, fontScale, textColor, 2)
 	*y += 30
-
 	counterText := fmt.Sprintf("Current: %d | Max: %d", solution.CurrentCount, solution.MaxCount)
 	gocv.PutText(mat, counterText, image.Pt(10, *y), fontFace, 0.7, textColor, 2)
 	*y += 40
 }
 
-func (fp *FrameProcessor) drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *AIProcessingResult) {
+func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *AIProcessingResult) {
 	if mat == nil {
 		return
 	}
-
-	statsLines := fp.formatStatsLines(frame, aiResult)
+	statsLines := formatStatsLines(frame, aiResult)
 	if len(statsLines) == 0 {
 		return
 	}
-
 	fontFace := gocv.FontHersheySimplex
 	fontScale := 0.6
 	thickness := 2
 	lineHeight := 25
 	padding := 10
-
 	maxTextWidth := 0
 	for _, line := range statsLines {
 		size := gocv.GetTextSize(line, fontFace, fontScale, thickness)
@@ -709,49 +549,37 @@ func (fp *FrameProcessor) drawStatsOverlay(mat *gocv.Mat, frame *models.Processe
 			maxTextWidth = size.X
 		}
 	}
-
 	startY := mat.Rows() - (len(statsLines)*lineHeight + padding*2)
 	if startY < 100 {
 		startY = 100
 	}
-
 	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: 180}
-	gocv.Rectangle(mat,
-		image.Rect(5, startY-padding, maxTextWidth+padding*2+5, startY+len(statsLines)*lineHeight+padding),
-		bgColor, -1)
-
+	gocv.Rectangle(mat, image.Rect(5, startY-padding, maxTextWidth+padding*2+5, startY+len(statsLines)*lineHeight+padding), bgColor, -1)
 	textColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
 	for i, line := range statsLines {
-		gocv.PutText(mat, line,
-			image.Pt(padding+5, startY+(i*lineHeight)+20),
-			fontFace, fontScale, textColor, thickness)
+		gocv.PutText(mat, line, image.Pt(padding+5, startY+(i*lineHeight)+20), fontFace, fontScale, textColor, thickness)
 	}
 }
 
-func (fp *FrameProcessor) formatStatsLines(frame *models.ProcessedFrame, aiResult *AIProcessingResult) []string {
+func formatStatsLines(frame *models.ProcessedFrame, aiResult *AIProcessingResult) []string {
 	var lines []string
-
 	lines = append(lines, fmt.Sprintf("Camera: %s", frame.CameraID))
 	lines = append(lines, fmt.Sprintf("Frame: #%d", frame.FrameID))
 	lines = append(lines, fmt.Sprintf("Resolution: %dx%d", frame.Width, frame.Height))
-
 	if frame.FPS > 0 {
 		lines = append(lines, fmt.Sprintf("FPS: %.1f", frame.FPS))
 	} else {
 		lines = append(lines, "FPS: --.-")
 	}
 	lines = append(lines, fmt.Sprintf("Latency: %dms", frame.Latency.Milliseconds()))
-
 	aiStatus := "AI: Disabled"
 	if frame.AIEnabled {
 		if aiResult != nil && aiResult.FrameProcessed {
 			detectionCount := len(aiResult.Detections)
 			aiStatus = fmt.Sprintf("AI: Active (%d detections)", detectionCount)
-
 			if aiResult.ProcessingTime > 0 {
 				lines = append(lines, fmt.Sprintf("AI Time: %dms", aiResult.ProcessingTime.Milliseconds()))
 			}
-
 			for project, count := range aiResult.ProjectResults {
 				if count > 0 {
 					lines = append(lines, fmt.Sprintf("%s: %d", project, count))
@@ -765,13 +593,11 @@ func (fp *FrameProcessor) formatStatsLines(frame *models.ProcessedFrame, aiResul
 		}
 	}
 	lines = append(lines, aiStatus)
-
 	lines = append(lines, fmt.Sprintf("Time: %s", frame.Timestamp.Format("15:04:05")))
 	lines = append(lines, fmt.Sprintf("Quality: %d%%", frame.Quality))
 	if frame.Bitrate > 0 {
 		lines = append(lines, fmt.Sprintf("Bitrate: %dkbps", frame.Bitrate))
 	}
-
 	return lines
 }
 
@@ -781,16 +607,12 @@ func max(a, b int) int {
 	}
 	return b
 }
-
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
 }
-
 func containsString(str, substr string) bool {
-	return len(str) >= len(substr) && str[:len(substr)] == substr ||
-		len(str) > len(substr) && str[len(str)-len(substr):] == substr ||
-		(len(str) > len(substr) && strings.Contains(str, substr))
+	return len(str) >= len(substr) && str[:len(substr)] == substr || len(str) > len(substr) && str[len(str)-len(substr):] == substr || (len(str) > len(substr) && strings.Contains(str, substr))
 }

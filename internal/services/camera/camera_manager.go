@@ -11,6 +11,7 @@ import (
 
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
+	frameprocessing "kepler-worker-go/internal/services/frameprocessing"
 	"kepler-worker-go/internal/services/postprocessing"
 	"kepler-worker-go/internal/services/publisher"
 	"kepler-worker-go/internal/services/recorder"
@@ -24,7 +25,7 @@ type CameraManager struct {
 	mutex   sync.RWMutex
 
 	// Pipeline components
-	frameProcessor *FrameProcessor
+	frameProcessor *frameprocessing.FrameProcessor
 	publisher      *Publisher         // MJPEG publisher
 	publisherSvc   *publisher.Service // MediaMTX publisher service
 	streamCapture  *StreamCapture
@@ -42,7 +43,7 @@ type CameraManager struct {
 // NewCameraManager creates a new camera manager with full pipeline
 func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service, recorderSvc *recorder.Service, publisherSvc *publisher.Service) (*CameraManager, error) {
 	// Create pipeline components
-	frameProcessor, err := NewFrameProcessor(cfg)
+	frameProcessor, err := frameprocessing.NewFrameProcessor(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create frame processor: %w", err)
 	}
@@ -173,7 +174,7 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	go cm.runFrameProcessor(camera)
 	go cm.runPublisher(camera)
 	go cm.runPostProcessor(camera)
-	go cm.runRecorderProcessor(camera)
+	// go cm.runRecorderProcessor(camera)
 
 	log.Info().
 		Str("camera_id", req.CameraID).
@@ -250,7 +251,7 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 	}()
 
 	// Create per-camera frame processor
-	frameProcessor, err := NewFrameProcessorWithCamera(cm.cfg, camera)
+	frameProcessor, err := frameprocessing.NewFrameProcessorWithCamera(cm.cfg, camera)
 	if err != nil {
 		log.Error().
 			Err(err).
@@ -259,7 +260,6 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 		return
 	}
 	defer frameProcessor.Shutdown()
-
 	for {
 		select {
 		case <-camera.StopChannel:
@@ -300,7 +300,7 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 
 			// Update camera AI statistics
 			if processedFrame.AIDetections != nil {
-				if aiResult, ok := processedFrame.AIDetections.(*AIProcessingResult); ok {
+				if aiResult, ok := processedFrame.AIDetections.(*frameprocessing.AIProcessingResult); ok {
 					camera.AIProcessingTime = aiResult.ProcessingTime
 					camera.AIDetectionCount += int64(len(aiResult.Detections))
 
@@ -398,9 +398,14 @@ func (cm *CameraManager) runPostProcessor(camera *models.Camera) {
 		case <-camera.StopChannel:
 			return
 		case processedFrame := <-camera.AlertFrames:
+			// Only process alerts if AI is enabled for this camera
+			if !camera.AIEnabled {
+				continue
+			}
+
 			// Use new post-processing service with detection-only processing
 			if cm.postProcessingService != nil {
-				aiResult, ok := processedFrame.AIDetections.(*AIProcessingResult)
+				aiResult, ok := processedFrame.AIDetections.(*frameprocessing.AIProcessingResult)
 				if !ok || len(aiResult.Detections) == 0 {
 					continue
 				}

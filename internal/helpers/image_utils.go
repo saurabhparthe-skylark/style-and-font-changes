@@ -61,6 +61,16 @@ func convertBGRToJPEG(bgrData []byte, width, height int, quality int) ([]byte, e
 		return nil, fmt.Errorf("empty BGR data")
 	}
 
+	// Auto-detect dimensions if provided values don't match data length
+	totalBytes := len(bgrData)
+	if width <= 0 || height <= 0 || width*height*3 != totalBytes {
+		if w, h, ok := guessDimensionsFromLength(totalBytes); ok {
+			width, height = w, h
+		} else {
+			return nil, fmt.Errorf("unable to infer frame dimensions from BGR length=%d", totalBytes)
+		}
+	}
+
 	// Create Mat from BGR bytes
 	mat, err := gocv.NewMatFromBytes(height, width, gocv.MatTypeCV8UC3, bgrData)
 	if err != nil {
@@ -89,8 +99,44 @@ func convertFrameToJPEG(frameData []byte, width, height int, quality int) ([]byt
 		return frameData, nil
 	}
 
-	// Assume BGR format and convert
+	// Assume BGR format and convert (auto-detect if needed)
 	return convertBGRToJPEG(frameData, width, height, quality)
+}
+
+// guessDimensionsFromLength tries to infer width/height from BGR byte length
+func guessDimensionsFromLength(totalBytes int) (int, int, bool) {
+	if totalBytes%3 != 0 {
+		return 0, 0, false
+	}
+	pixels := totalBytes / 3
+
+	// Common resolutions to try (width x height)
+	common := [][2]int{
+		{3840, 2160}, {2560, 1440}, {2560, 1600}, {2048, 1080},
+		{1920, 1080}, {1600, 900}, {1366, 768}, {1280, 960},
+		{1280, 800}, {1280, 720}, {1024, 768}, {1024, 576},
+		{854, 480}, {800, 600}, {800, 450}, {768, 432},
+		{720, 480}, {720, 405}, {640, 480}, {640, 360},
+		{480, 360}, {480, 270}, {426, 240}, {320, 240},
+	}
+	for _, wh := range common {
+		if wh[0]*wh[1] == pixels {
+			return wh[0], wh[1], true
+		}
+	}
+
+	// Fallback: try factorization with plausible widths
+	plausible := []int{1920, 1600, 1366, 1280, 1024, 960, 854, 800, 768, 720, 640, 480, 426, 400, 384, 352, 320}
+	for _, w := range plausible {
+		if pixels%w == 0 {
+			h := pixels / w
+			if h > 0 {
+				return w, h, true
+			}
+		}
+	}
+
+	return 0, 0, false
 }
 
 // CompressAndResizeImage compresses and resizes an image to fit within size limits
@@ -183,8 +229,8 @@ func CreateCroppedImageB64(frame []byte, bbox []float32, cameraID, identifier st
 			Str("camera_id", cameraID).
 			Msg("Frame data is not in image format, converting BGR to JPEG")
 
-		// Use standard frame dimensions for BGR conversion (1280x720 default)
-		jpegData, convertErr := convertBGRToJPEG(frame, 1280, 720, 95)
+		// Try to auto-detect dimensions for BGR conversion
+		jpegData, convertErr := convertBGRToJPEG(frame, 0, 0, 95)
 		if convertErr != nil {
 			log.Warn().
 				Err(convertErr).

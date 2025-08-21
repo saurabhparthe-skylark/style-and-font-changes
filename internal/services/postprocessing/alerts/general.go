@@ -140,9 +140,13 @@ func BuildConsolidatedGeneralAlert(detections []models.Detection, cameraID strin
 	// Add context image using annotated frame (shows full scene with overlays)
 	helpers.AddContextImage(&payload, annotatedFrame, cameraID, primaryDetection.TrackID, "Consolidated general alert")
 
-	// Add detection images for ALL detections using raw frame (clean crops without overlays)
+	// Add detection images: primary from annotated (with overlays), others from raw (clean)
 	for i, detection := range detections {
-		helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID,
+		frameForCrop := rawFrame
+		if detection.TrackID == primaryDetection.TrackID {
+			frameForCrop = annotatedFrame
+		}
+		helpers.AddDetectionImage(&payload, detection, frameForCrop, cameraID,
 			fmt.Sprintf("general_consolidated_%d_%d", detection.TrackID, i),
 			map[string]interface{}{
 				"alert_type":       decision.AlertType,
