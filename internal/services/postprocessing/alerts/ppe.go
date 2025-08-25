@@ -15,7 +15,7 @@ func HandlePPEDetection(detection models.Detection, decision models.AlertDecisio
 	// Build violations from available fields if missing
 	violations := append([]string{}, detection.Violations...)
 
-	//if send alert is not true, return decision
+	// if send alert is not true, return decision
 	if !decision.ShouldAlert {
 		return decision
 	}

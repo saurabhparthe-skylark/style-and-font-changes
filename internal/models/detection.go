@@ -8,7 +8,7 @@ import (
 type DetectionType string
 
 const (
-	DetectionTypePPE         DetectionType = "ppe_detection_new"
+	DetectionTypePPE         DetectionType = "ppe_detection_lr"
 	DetectionTypeCellphone   DetectionType = "cellphone_detection"
 	DetectionTypeDrone       DetectionType = "drone_detection"
 	DetectionTypeAircraft    DetectionType = "aircraft_detection"

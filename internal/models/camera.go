@@ -161,3 +161,19 @@ type CameraResponse struct {
 	HLSUrl    string `json:"hls_url"`
 	MJPEGUrl  string `json:"mjpeg_url"`
 }
+
+// RTSPCheckRequest for checking RTSP stream
+type RTSPCheckRequest struct {
+	URL string `json:"url" binding:"required"`
+}
+
+// RTSPCheckResponse for RTSP stream check result
+type RTSPCheckResponse struct {
+	Valid       bool    `json:"valid"`
+	Message     string  `json:"message"`
+	Thumbnail   string  `json:"thumbnail,omitempty"`    // Base64 encoded HD thumbnail
+	Width       int     `json:"width,omitempty"`        // Stream width
+	Height      int     `json:"height,omitempty"`       // Stream height
+	FPS         float64 `json:"fps,omitempty"`          // Stream FPS
+	ErrorDetail string  `json:"error_detail,omitempty"` // Detailed error if validation fails
+}

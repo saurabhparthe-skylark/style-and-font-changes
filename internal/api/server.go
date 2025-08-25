@@ -68,6 +68,7 @@ func (s *Server) setupRoutes() {
 	cameraGroup := s.router.Group("cameras")
 	{
 		cameraGroup.GET("/stats", cameraHandler.GetCameraStats)              // Camera statistics
+		cameraGroup.POST("/check-rtsp", cameraHandler.CheckRTSP)             // Check RTSP stream validity
 		cameraGroup.GET("", cameraHandler.ListCameras)                       // List all cameras
 		cameraGroup.GET("/:camera_id", cameraHandler.GetCamera)              // Get camera details
 		cameraGroup.POST("", cameraHandler.StartCamera)                      // Create/start camera

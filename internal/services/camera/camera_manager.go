@@ -2,16 +2,19 @@ package camera
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"image"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"gocv.io/x/gocv"
 
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
-	frameprocessing "kepler-worker-go/internal/services/frameprocessing"
+	"kepler-worker-go/internal/services/frameprocessing"
 	"kepler-worker-go/internal/services/postprocessing"
 	"kepler-worker-go/internal/services/publisher"
 	"kepler-worker-go/internal/services/recorder"
@@ -1099,4 +1102,124 @@ func (cm *CameraManager) safeCloseRecorderFrames(ch chan *models.ProcessedFrame,
 		}
 	}()
 	close(ch)
+}
+
+// ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail
+func (cm *CameraManager) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCheckResponse {
+	response := &models.RTSPCheckResponse{
+		Valid:   false,
+		Message: "RTSP stream validation failed",
+	}
+
+	log.Info().Str("rtsp_url", rtspURL).Msg("Starting RTSP stream validation")
+
+	// Try to open the RTSP stream
+	cap, err := gocv.OpenVideoCapture(rtspURL)
+	if err != nil {
+		response.ErrorDetail = fmt.Sprintf("Failed to open RTSP stream: %v", err)
+		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
+		return response
+	}
+	defer cap.Close()
+
+	// Check if capture is opened
+	if !cap.IsOpened() {
+		response.ErrorDetail = "RTSP stream could not be opened"
+		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
+		return response
+	}
+
+	// Set timeout for frame reading (5 seconds)
+	timeout := time.After(5 * time.Second)
+	frameReadSuccess := make(chan bool, 1)
+
+	var frame gocv.Mat
+	var actualFPS, actualWidth, actualHeight float64
+
+	// Try to read frame in goroutine to handle timeout
+	go func() {
+		frame = gocv.NewMat()
+
+		// Try to read a few frames to ensure stream is working
+		for i := 0; i < 3; i++ {
+			if cap.Read(&frame) && !frame.Empty() {
+				frameReadSuccess <- true
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		frameReadSuccess <- false
+	}()
+
+	// Wait for frame read or timeout
+	select {
+	case success := <-frameReadSuccess:
+		if !success {
+			frame.Close()
+			response.ErrorDetail = "Failed to read frames from RTSP stream"
+			log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
+			return response
+		}
+	case <-timeout:
+		frame.Close()
+		response.ErrorDetail = "Timeout reading from RTSP stream"
+		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
+		return response
+	}
+
+	defer frame.Close()
+
+	// Get stream properties
+	actualFPS = cap.Get(gocv.VideoCaptureFPS)
+	actualWidth = cap.Get(gocv.VideoCaptureFrameWidth)
+	actualHeight = cap.Get(gocv.VideoCaptureFrameHeight)
+
+	// Validate frame dimensions
+	if frame.Cols() <= 0 || frame.Rows() <= 0 {
+		response.ErrorDetail = "Invalid frame dimensions"
+		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
+		return response
+	}
+
+	// Resize to HD if needed (1280x720 for HD thumbnail)
+	hdWidth, hdHeight := 1280, 720
+	var resizedFrame gocv.Mat
+
+	if frame.Cols() != hdWidth || frame.Rows() != hdHeight {
+		resizedFrame = gocv.NewMat()
+		gocv.Resize(frame, &resizedFrame, image.Pt(hdWidth, hdHeight), 0, 0, gocv.InterpolationLinear)
+	} else {
+		resizedFrame = frame.Clone()
+	}
+	defer resizedFrame.Close()
+
+	// Convert to JPEG with high quality
+	jpegData, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, resizedFrame, []int{gocv.IMWriteJpegQuality, 95})
+	if err != nil {
+		response.ErrorDetail = fmt.Sprintf("Failed to encode thumbnail: %v", err)
+		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
+		return response
+	}
+	defer jpegData.Close()
+
+	// Convert to base64 data URL
+	thumbnail := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegData.GetBytes())
+
+	// Success response
+	response.Valid = true
+	response.Message = "RTSP stream is valid and accessible"
+	response.Thumbnail = thumbnail
+	response.Width = int(actualWidth)
+	response.Height = int(actualHeight)
+	response.FPS = actualFPS
+	response.ErrorDetail = ""
+
+	log.Info().
+		Str("rtsp_url", rtspURL).
+		Int("width", response.Width).
+		Int("height", response.Height).
+		Float64("fps", response.FPS).
+		Msg("RTSP stream validation successful")
+
+	return response
 }

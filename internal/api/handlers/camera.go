@@ -276,3 +276,32 @@ func (h *CameraHandler) DeleteCamera(c *gin.Context) {
 	log.Info().Str("camera_id", cameraID).Msg("camera_deleted")
 	c.JSON(http.StatusOK, gin.H{"message": "Camera deleted successfully"})
 }
+
+// CheckRTSP godoc
+// @Summary Check RTSP stream validity
+// @Description Validates RTSP URL and returns HD thumbnail if stream is accessible
+// @Tags cameras
+// @Accept json
+// @Produce json
+// @Param request body models.RTSPCheckRequest true "RTSP URL to check"
+// @Success 200 {object} models.RTSPCheckResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /cameras/check-rtsp [post]
+func (h *CameraHandler) CheckRTSP(c *gin.Context) {
+	var req models.RTSPCheckRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Error().Err(err).Msg("invalid_rtsp_check_request")
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate and capture thumbnail from RTSP stream using camera manager
+	response := h.cameraManager.ValidateRTSPAndCaptureThumbnail(req.URL)
+
+	if response.Valid {
+		c.JSON(http.StatusOK, response)
+	} else {
+		c.JSON(http.StatusOK, response) // Return 200 with valid:false instead of error
+	}
+}
