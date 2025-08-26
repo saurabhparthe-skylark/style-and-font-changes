@@ -292,3 +292,23 @@ type DetectionProcessor interface {
 type MessagePublisher interface {
 	Publish(subject string, data interface{}) error
 }
+
+// SolutionResults represents the results from AI solution processing
+type SolutionResults struct {
+	CurrentCount      int32 `json:"current_count"`
+	TotalCount        int32 `json:"total_count"`
+	MaxCount          int32 `json:"max_count"`
+	OutRegionCount    int32 `json:"out_region_count"`
+	ViolationDetected *bool `json:"violation_detected,omitempty"`
+	IntrusionDetected *bool `json:"intrusion_detected,omitempty"`
+}
+
+// AIProcessingResult represents the complete result from AI processing
+type AIProcessingResult struct {
+	Detections     []Detection                `json:"detections"`
+	Solutions      map[string]SolutionResults `json:"solutions"`
+	ProcessingTime time.Duration              `json:"processing_time"`
+	ErrorMessage   string                     `json:"error_message,omitempty"`
+	FrameProcessed bool                       `json:"frame_processed"`
+	ProjectResults map[string]int             `json:"project_results"`
+}

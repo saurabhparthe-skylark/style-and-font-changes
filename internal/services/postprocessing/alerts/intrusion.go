@@ -22,11 +22,6 @@ func HandleIntrusionDetection(detection models.Detection, decision models.AlertD
 	decision.Description = fmt.Sprintf("Intrusion detected with %.1f%% confidence", detection.Score*100)
 	decision.Metadata["is_intrusion"] = true
 
-	log.Info().
-		Int32("track_id", detection.TrackID).
-		Float32("confidence", detection.Score).
-		Msg("Intrusion alert will be created")
-
 	return decision
 }
 

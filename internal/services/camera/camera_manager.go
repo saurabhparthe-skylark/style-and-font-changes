@@ -18,6 +18,7 @@ import (
 	"kepler-worker-go/internal/services/postprocessing"
 	"kepler-worker-go/internal/services/publisher"
 	"kepler-worker-go/internal/services/recorder"
+	"kepler-worker-go/internal/services/streamcapture"
 )
 
 // CameraManager manages the entire camera pipeline
@@ -28,11 +29,11 @@ type CameraManager struct {
 	mutex   sync.RWMutex
 
 	// Pipeline components
-	frameProcessor *frameprocessing.FrameProcessor
-	publisher      *Publisher         // MJPEG publisher
-	publisherSvc   *publisher.Service // MediaMTX publisher service
-	streamCapture  *StreamCapture
-	recorder       *recorder.Service
+	frameProcessor   *frameprocessing.FrameProcessor
+	publisher        *Publisher         // MJPEG publisher
+	publisherSvc     *publisher.Service // MediaMTX publisher service
+	streamCaptureSvc *streamcapture.Service
+	recorder         *recorder.Service
 
 	stopChannel chan struct{}
 
@@ -56,7 +57,7 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 		return nil, fmt.Errorf("failed to create MJPEG publisher: %w", err)
 	}
 
-	streamCapture := NewStreamCapture(cfg)
+	streamCaptureSvc := streamcapture.NewService(cfg)
 
 	cm := &CameraManager{
 		cfg:                   cfg,
@@ -64,7 +65,7 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 		frameProcessor:        frameProcessor,
 		publisher:             mjpegPublisher,
 		publisherSvc:          publisherSvc,
-		streamCapture:         streamCapture,
+		streamCaptureSvc:      streamCaptureSvc,
 		recorder:              recorderSvc,
 		stopChannel:           make(chan struct{}),
 		postProcessingService: postProcessingSvc,
@@ -216,14 +217,14 @@ func (cm *CameraManager) runStreamReader(camera *models.Camera) {
 		case <-camera.StopChannel:
 			return
 		default:
-			err := cm.streamCapture.StartVideoCaptureProcess(camera)
+			err := cm.streamCaptureSvc.StartVideoCaptureProcess(camera)
 			if err != nil {
 				log.Error().Err(err).Str("camera_id", camera.ID).Msg("VideoCapture process failed")
 				camera.ErrorCount++
 				attempt++
 
 				// jittered exponential backoff within configured min/max
-				delay := cm.streamCapture.CalculateBackoffDelay(attempt)
+				delay := cm.streamCaptureSvc.CalculateBackoffDelay(attempt)
 				log.Info().Str("camera_id", camera.ID).Dur("retry_in", delay).Int("attempt", attempt).Msg("Reconnecting to camera")
 
 				select {
@@ -295,7 +296,7 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 			startTime := time.Now()
 
 			// Update camera statistics first
-			camera.FPS = cm.streamCapture.CalculateFPS(camera)
+			camera.FPS = cm.streamCaptureSvc.CalculateFPS(camera)
 			camera.Latency = time.Since(latestFrame.Timestamp)
 
 			// Process the latest frame with current stats and per-camera AI settings
@@ -303,7 +304,7 @@ func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
 
 			// Update camera AI statistics
 			if processedFrame.AIDetections != nil {
-				if aiResult, ok := processedFrame.AIDetections.(*frameprocessing.AIProcessingResult); ok {
+				if aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult); ok {
 					camera.AIProcessingTime = aiResult.ProcessingTime
 					camera.AIDetectionCount += int64(len(aiResult.Detections))
 
@@ -408,7 +409,7 @@ func (cm *CameraManager) runPostProcessor(camera *models.Camera) {
 
 			// Use new post-processing service with detection-only processing
 			if cm.postProcessingService != nil {
-				aiResult, ok := processedFrame.AIDetections.(*frameprocessing.AIProcessingResult)
+				aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult)
 				if !ok || len(aiResult.Detections) == 0 {
 					continue
 				}

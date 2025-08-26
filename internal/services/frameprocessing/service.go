@@ -19,6 +19,7 @@ import (
 
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
+	"kepler-worker-go/internal/services/frameprocessing/solutions"
 	pb "kepler-worker-go/proto"
 )
 
@@ -186,28 +187,10 @@ func (fp *FrameProcessor) refreshAIConnection() {
 	}
 }
 
-type SolutionResults struct {
-	CurrentCount      int32 `json:"current_count"`
-	TotalCount        int32 `json:"total_count"`
-	MaxCount          int32 `json:"max_count"`
-	OutRegionCount    int32 `json:"out_region_count"`
-	ViolationDetected *bool `json:"violation_detected,omitempty"`
-	IntrusionDetected *bool `json:"intrusion_detected,omitempty"`
-}
-
-type AIProcessingResult struct {
-	Detections     []models.Detection         `json:"detections"`
-	Solutions      map[string]SolutionResults `json:"solutions"`
-	ProcessingTime time.Duration              `json:"processing_time"`
-	ErrorMessage   string                     `json:"error_message,omitempty"`
-	FrameProcessed bool                       `json:"frame_processed"`
-	ProjectResults map[string]int             `json:"project_results"`
-}
-
 // Overlay registry for per-project drawings
 type OverlayDrawer interface {
 	DrawDetections(mat *gocv.Mat, detections []models.Detection)
-	DrawSolutions(mat *gocv.Mat, solutions map[string]SolutionResults)
+	DrawSolutions(mat *gocv.Mat, solutionResults map[string]models.SolutionResults)
 }
 
 var overlayRegistry = map[string]OverlayDrawer{}
@@ -274,16 +257,59 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 	}
 }
 
-func (d defaultOverlay) DrawSolutions(mat *gocv.Mat, solutions map[string]SolutionResults) {
-	if mat == nil || len(solutions) == 0 {
+func (d defaultOverlay) DrawSolutions(mat *gocv.Mat, solutionResults map[string]models.SolutionResults) {
+	if mat == nil || len(solutionResults) == 0 {
 		return
 	}
-	// y := 30
-	// for solutionKey, solution := range solutions {
-	// 	if containsString(solutionKey, "people_counter") {
-	// 		drawPeopleCounterOverlay(mat, &y, solution)
-	// 	}
-	// }
+
+	// This is the old interface - we need projects and detections!
+	// For now, just log that we need to update the calling code
+	log.Warn().Msg("DrawSolutions called with old interface - need projects and detections")
+}
+
+// drawSolutionOverlays draws overlays for each project using simple for and switch
+func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[string]models.SolutionResults, detections []models.Detection) {
+	if mat == nil || len(projects) == 0 {
+		return
+	}
+
+	y := 30
+	for _, project := range projects {
+		switch project {
+		case "people_counter", "person_detection", "person_detection_lr":
+			// Get solution data or create default
+			if solution, exists := solutionsMap[project]; exists {
+				solutions.DrawPeopleCounter(mat, solution, &y)
+			} else {
+				// Default solution
+				defaultSolution := models.SolutionResults{CurrentCount: 0}
+				solutions.DrawPeopleCounter(mat, defaultSolution, &y)
+			}
+		case "intrusion_detection":
+			if solution, exists := solutionsMap[project]; exists {
+				solutions.DrawIntrusion(mat, solution, &y)
+			} else {
+				hasIntrusion := false
+				defaultSolution := models.SolutionResults{IntrusionDetected: &hasIntrusion}
+				solutions.DrawIntrusion(mat, defaultSolution, &y)
+			}
+		case "ppe_detection", "violation_detection":
+			if solution, exists := solutionsMap[project]; exists {
+				solutions.DrawPPE(mat, solution, &y)
+			} else {
+				hasViolation := false
+				defaultSolution := models.SolutionResults{ViolationDetected: &hasViolation}
+				solutions.DrawPPE(mat, defaultSolution, &y)
+			}
+		case "vehicle_detection":
+			if solution, exists := solutionsMap[project]; exists {
+				solutions.DrawVehicle(mat, solution, &y)
+			} else {
+				defaultSolution := models.SolutionResults{CurrentCount: 0}
+				solutions.DrawVehicle(mat, defaultSolution, &y)
+			}
+		}
+	}
 }
 
 func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []string, currentFPS float64, currentLatency time.Duration) *models.ProcessedFrame {
@@ -319,7 +345,7 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 		Bitrate:   fp.cfg.OutputBitrate,
 	}
 
-	aiResult := &AIProcessingResult{Detections: []models.Detection{}, Solutions: make(map[string]SolutionResults), ProjectResults: make(map[string]int), FrameProcessed: false}
+	aiResult := &models.AIProcessingResult{Detections: []models.Detection{}, Solutions: make(map[string]models.SolutionResults), ProjectResults: make(map[string]int), FrameProcessed: false}
 
 	shouldProcessAI := aiEnabled && len(projects) > 0 && fp.grpcClient != nil
 	log.Debug().Str("camera_id", rawFrame.CameraID).Bool("ai_enabled", aiEnabled).Int("projects_count", len(projects)).Bool("grpc_client_available", fp.grpcClient != nil).Bool("initial_should_process", shouldProcessAI).Msg("AI processing decision check")
@@ -349,12 +375,12 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 	}
 
 	processedFrame.AIDetections = aiResult
-	fp.addEnhancedStatsFrame(processedFrame, aiResult)
+	fp.addOverlay(processedFrame, aiResult, projects)
 	return processedFrame
 }
 
-func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects []string, aiTimeout time.Duration) *AIProcessingResult {
-	result := &AIProcessingResult{Detections: []models.Detection{}, Solutions: make(map[string]SolutionResults), ProjectResults: make(map[string]int), FrameProcessed: false}
+func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects []string, aiTimeout time.Duration) *models.AIProcessingResult {
+	result := &models.AIProcessingResult{Detections: []models.Detection{}, Solutions: make(map[string]models.SolutionResults), ProjectResults: make(map[string]int), FrameProcessed: false}
 
 	mat, err := gocv.NewMatFromBytes(rawFrame.Height, rawFrame.Width, gocv.MatTypeCV8UC3, rawFrame.Data)
 	if err != nil {
@@ -379,12 +405,17 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	defer cancel()
 
 	resp, err := fp.grpcClient.InferDetection(ctx, req)
+
 	log.Debug().Str("camera_id", rawFrame.CameraID).Str("json_data", func() string {
 		if resp != nil {
 			return resp.String()
 		}
 		return ""
 	}()).Msg("AI response")
+
+	//print resp
+	// log.Info().Msgf("AI response: %v", resp)
+
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("AI service call failed: %v", err)
 		log.Error().Err(err).Str("camera_id", rawFrame.CameraID).Dur("timeout", aiTimeout).Msg("ai_grpc_call_failed")
@@ -396,7 +427,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	return result
 }
 
-func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionResponse, result *AIProcessingResult) {
+func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionResponse, result *models.AIProcessingResult) {
 	if resp == nil || resp.Results == nil {
 		return
 	}
@@ -424,6 +455,20 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 			}
 		}
 		result.ProjectResults[projectName] = projectCount
+
+		// Extract solutions from the response
+		if projectDetections.Solutions != nil {
+			for solutionKey, solutionData := range projectDetections.Solutions {
+				result.Solutions[solutionKey] = models.SolutionResults{
+					CurrentCount:      solutionData.GetCurrentCount(),
+					TotalCount:        solutionData.GetTotalCount(),
+					MaxCount:          solutionData.GetMaxCount(),
+					OutRegionCount:    solutionData.GetOutRegionCount(),
+					ViolationDetected: solutionData.ViolationDetected,
+					IntrusionDetected: solutionData.IntrusionDetected,
+				}
+			}
+		}
 	}
 }
 
@@ -475,7 +520,7 @@ func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName st
 	return modelDet
 }
 
-func (fp *FrameProcessor) addEnhancedStatsFrame(processedFrame *models.ProcessedFrame, aiResult *AIProcessingResult) {
+func (fp *FrameProcessor) addOverlay(processedFrame *models.ProcessedFrame, aiResult *models.AIProcessingResult, projects []string) {
 	mat, err := gocv.NewMatFromBytes(processedFrame.Height, processedFrame.Width, gocv.MatTypeCV8UC3, processedFrame.Data)
 	if err != nil {
 		log.Error().Err(err).Str("camera_id", processedFrame.CameraID).Msg("Failed to create Mat from frame data")
@@ -495,9 +540,16 @@ func (fp *FrameProcessor) addEnhancedStatsFrame(processedFrame *models.Processed
 		}
 	}
 
-	if aiResult != nil && len(aiResult.Solutions) > 0 {
-		// Global solutions overlay (or can be specialized later)
-		defaultOverlay{}.DrawSolutions(&mat, aiResult.Solutions)
+	// Draw solution overlays based on camera projects
+	var projectsToUse []string
+	if fp.camera != nil && len(fp.camera.Projects) > 0 {
+		projectsToUse = fp.camera.Projects
+	} else {
+		projectsToUse = projects
+	}
+
+	if len(projectsToUse) > 0 {
+		drawSolutionOverlays(&mat, projectsToUse, aiResult.Solutions, aiResult.Detections)
 	}
 
 	if fp.cfg != nil && fp.cfg.ShowMetadata {
@@ -506,49 +558,7 @@ func (fp *FrameProcessor) addEnhancedStatsFrame(processedFrame *models.Processed
 	processedFrame.Data = mat.ToBytes()
 }
 
-func formatDetectionLabel(det models.Detection) string {
-	label := fmt.Sprintf("%s %.2f", det.Label, det.Score)
-	if det.TrackID > 0 {
-		label += fmt.Sprintf(" ID:%d", det.TrackID)
-	}
-	if det.Compliance != nil {
-		label += fmt.Sprintf(" %s", *det.Compliance)
-	}
-	if det.Plate != nil && *det.Plate != "" {
-		label += fmt.Sprintf(" [%s]", *det.Plate)
-	}
-	if det.Gender != nil && *det.Gender != "" {
-		label += fmt.Sprintf(" %s", *det.Gender)
-	}
-	if len(det.Violations) > 0 {
-		label += " VIOLATION"
-	}
-	return label
-}
-
-func drawLabelWithBackground(mat *gocv.Mat, text string, x, y int, textColor color.RGBA) {
-	fontFace := gocv.FontHersheySimplex
-	fontScale := 0.6
-	thickness := 2
-	textSize := gocv.GetTextSize(text, fontFace, fontScale, thickness)
-	labelY := y - 10
-	if labelY < textSize.Y+5 {
-		labelY = y + textSize.Y + 10
-	}
-	labelX := x
-	if labelX+textSize.X > mat.Cols() {
-		labelX = mat.Cols() - textSize.X - 5
-	}
-	if labelY+textSize.Y > mat.Rows() {
-		labelY = mat.Rows() - 5
-	}
-	bgColor := color.RGBA{R: 0, G: 0, B: 0, A: 180}
-	gocv.Rectangle(mat, image.Rect(labelX-2, labelY-textSize.Y-2, labelX+textSize.X+2, labelY+2), bgColor, -1)
-	whiteColor := color.RGBA{R: 255, G: 255, B: 255, A: 255}
-	gocv.PutText(mat, text, image.Pt(labelX, labelY), gocv.FontHersheySimplex, fontScale, whiteColor, thickness)
-}
-
-func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *AIProcessingResult, cfg *config.Config) {
+func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *models.AIProcessingResult, cfg *config.Config) {
 	if mat == nil {
 		return
 	}
@@ -594,7 +604,7 @@ func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *AIP
 	}
 }
 
-func formatStatsLines(frame *models.ProcessedFrame, aiResult *AIProcessingResult, cfg *config.Config) []string {
+func formatStatsLines(frame *models.ProcessedFrame, aiResult *models.AIProcessingResult, cfg *config.Config) []string {
 	var lines []string
 
 	show := func(flag bool) bool { return cfg == nil || flag }
@@ -674,9 +684,6 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-func containsString(str, substr string) bool {
-	return len(str) >= len(substr) && str[:len(substr)] == substr || len(str) > len(substr) && str[len(str)-len(substr):] == substr || (len(str) > len(substr) && strings.Contains(str, substr))
 }
 
 // parseHexColor converts a color string like "#RRGGBB" to color.RGBA

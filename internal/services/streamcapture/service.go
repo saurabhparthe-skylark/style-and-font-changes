@@ -1,4 +1,4 @@
-package camera
+package streamcapture
 
 import (
 	"fmt"
@@ -14,20 +14,20 @@ import (
 	"kepler-worker-go/internal/models"
 )
 
-// StreamCapture handles video capture operations
-type StreamCapture struct {
+// Service handles video capture operations
+type Service struct {
 	cfg *config.Config
 }
 
-// NewStreamCapture creates a new stream capture service
-func NewStreamCapture(cfg *config.Config) *StreamCapture {
-	return &StreamCapture{
+// NewService creates a new stream capture service
+func NewService(cfg *config.Config) *Service {
+	return &Service{
 		cfg: cfg,
 	}
 }
 
 // StartVideoCaptureProcess starts OpenCV VideoCapture for a camera
-func (sc *StreamCapture) StartVideoCaptureProcess(camera *models.Camera) error {
+func (s *Service) StartVideoCaptureProcess(camera *models.Camera) error {
 	log.Info().
 		Str("camera_id", camera.ID).
 		Str("url", camera.URL).
@@ -51,8 +51,8 @@ func (sc *StreamCapture) StartVideoCaptureProcess(camera *models.Camera) error {
 
 	// Set RTSP properties for low latency
 	cap.Set(gocv.VideoCaptureBufferSize, 1) // Minimal buffer
-	cap.Set(gocv.VideoCaptureFrameWidth, float64(sc.cfg.OutputWidth))
-	cap.Set(gocv.VideoCaptureFrameHeight, float64(sc.cfg.OutputHeight))
+	cap.Set(gocv.VideoCaptureFrameWidth, float64(s.cfg.OutputWidth))
+	cap.Set(gocv.VideoCaptureFrameHeight, float64(s.cfg.OutputHeight))
 
 	if !cap.IsOpened() {
 		return fmt.Errorf("video capture is not opened for camera %s", camera.ID)
@@ -122,8 +122,8 @@ func (sc *StreamCapture) StartVideoCaptureProcess(camera *models.Camera) error {
 			camera.LastFrameTime = time.Now()
 
 			processedImg := gocv.NewMat()
-			if img.Cols() != sc.cfg.OutputWidth || img.Rows() != sc.cfg.OutputHeight {
-				gocv.Resize(img, &processedImg, image.Pt(sc.cfg.OutputWidth, sc.cfg.OutputHeight), 0, 0, gocv.InterpolationLinear)
+			if img.Cols() != s.cfg.OutputWidth || img.Rows() != s.cfg.OutputHeight {
+				gocv.Resize(img, &processedImg, image.Pt(s.cfg.OutputWidth, s.cfg.OutputHeight), 0, 0, gocv.InterpolationLinear)
 			} else {
 				processedImg = img.Clone()
 			}
@@ -137,22 +137,22 @@ func (sc *StreamCapture) StartVideoCaptureProcess(camera *models.Camera) error {
 				Data:      frameData,
 				Timestamp: time.Now(),
 				FrameID:   frameID,
-				Width:     sc.cfg.OutputWidth,
-				Height:    sc.cfg.OutputHeight,
+				Width:     s.cfg.OutputWidth,
+				Height:    s.cfg.OutputHeight,
 				Format:    "BGR24",
 			}
 
 			// Send to processing pipeline
-			sc.sendFrameToPipeline(camera, rawFrame, frameID)
+			s.sendFrameToPipeline(camera, rawFrame, frameID)
 
-			targetInterval := time.Second / time.Duration(sc.getTargetFPS())
+			targetInterval := time.Second / time.Duration(s.getTargetFPS())
 			time.Sleep(targetInterval)
 		}
 	}
 }
 
 // sendFrameToPipeline sends frame to pipeline with buffer management and panic recovery
-func (sc *StreamCapture) sendFrameToPipeline(camera *models.Camera, rawFrame *models.RawFrame, frameID int64) {
+func (s *Service) sendFrameToPipeline(camera *models.Camera, rawFrame *models.RawFrame, frameID int64) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Debug().
@@ -188,7 +188,7 @@ func (sc *StreamCapture) sendFrameToPipeline(camera *models.Camera, rawFrame *mo
 			select {
 			case <-rawFramesChan:
 				droppedRaw++
-				if droppedRaw >= sc.cfg.FrameBufferSize/2 {
+				if droppedRaw >= s.cfg.FrameBufferSize/2 {
 					break DrainRawLoop
 				}
 			default:
@@ -217,7 +217,7 @@ func (sc *StreamCapture) sendFrameToPipeline(camera *models.Camera, rawFrame *mo
 }
 
 // CalculateFPS calculates current FPS for a camera using rolling window
-func (sc *StreamCapture) CalculateFPS(camera *models.Camera) float64 {
+func (s *Service) CalculateFPS(camera *models.Camera) float64 {
 	if camera.FrameCount < 2 {
 		return 0
 	}
@@ -247,28 +247,28 @@ func (sc *StreamCapture) CalculateFPS(camera *models.Camera) float64 {
 }
 
 // getTargetFPS returns target FPS based on AI status
-func (sc *StreamCapture) getTargetFPS() int {
-	if sc.cfg.AIEnabled {
-		return sc.cfg.MaxFPSWithAI
+func (s *Service) getTargetFPS() int {
+	if s.cfg.AIEnabled {
+		return s.cfg.MaxFPSWithAI
 	}
-	return sc.cfg.MaxFPSNoAI
+	return s.cfg.MaxFPSNoAI
 }
 
 // CalculateBackoffDelay calculates jittered exponential backoff delay
-func (sc *StreamCapture) CalculateBackoffDelay(attempt int) time.Duration {
+func (s *Service) CalculateBackoffDelay(attempt int) time.Duration {
 	// Base delay with exponential backoff
 	baseDelay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 
 	// Clamp to configured min/max
-	if baseDelay < sc.cfg.ReconnectBackoffMin {
-		baseDelay = sc.cfg.ReconnectBackoffMin
+	if baseDelay < s.cfg.ReconnectBackoffMin {
+		baseDelay = s.cfg.ReconnectBackoffMin
 	}
-	if baseDelay > sc.cfg.ReconnectBackoffMax {
-		baseDelay = sc.cfg.ReconnectBackoffMax
+	if baseDelay > s.cfg.ReconnectBackoffMax {
+		baseDelay = s.cfg.ReconnectBackoffMax
 	}
 
 	// Add jitter (random percentage of the delay)
-	jitterPct := float64(sc.cfg.ReconnectJitterPct) / 100.0
+	jitterPct := float64(s.cfg.ReconnectJitterPct) / 100.0
 	jitter := time.Duration(float64(baseDelay) * jitterPct * (rand.Float64()*2 - 1))
 
 	return baseDelay + jitter
