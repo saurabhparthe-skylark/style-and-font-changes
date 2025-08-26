@@ -1,5 +1,3 @@
-SHELL := /usr/bin/fish
-
 .PHONY: build clean proto swagger run dev test fmt lint help docker-build docker-build-static docker-push docker-run
 
 # Application configuration
