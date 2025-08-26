@@ -68,6 +68,28 @@ services:
       options:
         max-size: "15m"
         max-file: "3"
+  
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: kepler-mediamtx
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
+      - ./data/mediamtx:/recordings
+      - ./logs/mediamtx:/logs
+    ports:
+      - "8889:8889"   # HTTP/WebRTC
+      - "1935:1935"   # RTMP
+      - "8554:8554"   # RTSP
+      - "8322:8322/udp" # RTP
+      - "8000:8000/udp" # WebRTC UDP
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8889"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   kepler-videos:

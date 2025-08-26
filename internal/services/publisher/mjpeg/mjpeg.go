@@ -1,4 +1,4 @@
-package camera
+package mjpeg
 
 import (
 	"fmt"
@@ -195,5 +195,5 @@ func (p *Publisher) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, came
 }
 
 func (p *Publisher) Shutdown() {
-	log.Info().Msg("Publisher shutting down")
+	log.Info().Msg("MJPEG Publisher shutting down")
 }

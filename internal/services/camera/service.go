@@ -30,8 +30,7 @@ type CameraManager struct {
 
 	// Pipeline components
 	frameProcessor   *frameprocessing.FrameProcessor
-	publisher        *Publisher         // MJPEG publisher
-	publisherSvc     *publisher.Service // MediaMTX publisher service
+	publisherSvc     *publisher.Service // Unified publisher service (MJPEG + WebRTC)
 	streamCaptureSvc *streamcapture.Service
 	recorder         *recorder.Service
 
@@ -52,18 +51,12 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 		return nil, fmt.Errorf("failed to create frame processor: %w", err)
 	}
 
-	mjpegPublisher, err := NewPublisher(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create MJPEG publisher: %w", err)
-	}
-
 	streamCaptureSvc := streamcapture.NewService(cfg)
 
 	cm := &CameraManager{
 		cfg:                   cfg,
 		cameras:               make(map[string]*models.Camera),
 		frameProcessor:        frameProcessor,
-		publisher:             mjpegPublisher,
 		publisherSvc:          publisherSvc,
 		streamCaptureSvc:      streamCaptureSvc,
 		recorder:              recorderSvc,
@@ -367,19 +360,12 @@ func (cm *CameraManager) runPublisher(camera *models.Camera) {
 		case <-camera.StopChannel:
 			return
 		case processedFrame := <-camera.ProcessedFrames:
-			// Publish to MJPEG
-			err := cm.publisher.PublishFrame(processedFrame)
+			// Publish to both MJPEG and WebRTC via unified publisher service
+			err := cm.publisherSvc.PublishFrame(processedFrame)
 			if err != nil {
-				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish MJPEG frame")
+				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish frame")
 				camera.ErrorCount++
 			}
-
-			// // Publish to MediaMTX via publisher service
-			// err = cm.publisherSvc.PublishFrame(processedFrame)
-			// if err != nil {
-			// 	log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish MediaMTX frame")
-			// 	// Don't increment error count for MediaMTX failures as it's secondary
-			// }
 		}
 	}
 }
@@ -676,13 +662,13 @@ func (cm *CameraManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delegate to publisher for actual MJPEG streaming
-	if cm.publisher == nil {
+	// Delegate to publisher service for actual MJPEG streaming
+	if cm.publisherSvc == nil {
 		http.Error(w, "Publisher service not available", http.StatusServiceUnavailable)
 		return
 	}
 
-	cm.publisher.StreamMJPEGHTTP(w, r, cameraID)
+	cm.publisherSvc.StreamMJPEGHTTP(w, r, cameraID)
 }
 
 // runWatchdog monitors camera health and handles cleanup
