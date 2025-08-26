@@ -83,7 +83,7 @@ clean:
 tools:
 	@echo "Installing development tools..."
 	go install github.com/swaggo/swag/cmd/swag@latest
-	go install github.com/cosmtrek/air@latest
+	go install github.com/air-verse/air@latest
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 ## Build Docker image using docker-compose
