@@ -29,6 +29,9 @@ RUN CGO_ENABLED=1 go build \
 
 FROM gocv/opencv:4.12.0-ubuntu-24.04
 
+# Install ffmpeg for WebRTC encoding
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy just the binary and docs (no Go toolchain, no cache)
