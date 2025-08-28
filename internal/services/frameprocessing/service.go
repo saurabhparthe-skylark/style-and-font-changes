@@ -400,7 +400,9 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 
 	jpegBytes := buf.GetBytes()
 
-	req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: projects}
+	// Sanitize camera ID for AI service compatibility
+	sanitizedID := sanitizeCameraID(rawFrame.CameraID)
+	req := &pb.FrameRequest{Image: jpegBytes, CameraId: sanitizedID, ProjectNames: projects}
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
@@ -425,6 +427,22 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	result.FrameProcessed = true
 	fp.extractDetectionsFromResponse(resp, result)
 	return result
+}
+
+// sanitizeCameraID replaces any non-alphanumeric/underscore characters with underscore for external services
+func sanitizeCameraID(id string) string {
+	if id == "" {
+		return id
+	}
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
 }
 
 func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionResponse, result *models.AIProcessingResult) {

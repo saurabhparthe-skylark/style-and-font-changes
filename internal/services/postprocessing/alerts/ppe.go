@@ -16,9 +16,9 @@ func HandlePPEDetection(detection models.Detection, decision models.AlertDecisio
 	violations := append([]string{}, detection.Violations...)
 
 	// if send alert is not true, return decision
-	if !decision.ShouldAlert {
-		return decision
-	}
+	// if !decision.ShouldAlert {
+	// 	return decision
+	// }
 
 	// Derive violations from has_* flags when present
 	if detection.HasVest != nil && !*detection.HasVest {
