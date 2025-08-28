@@ -183,10 +183,11 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 				continue
 			}
 
+			// Global PPE cooldown across all cameras and projects
 			cooldownKey := models.AlertCooldownKey{
-				CameraID:    cameraID,
-				ProjectName: primaryDetection.ProjectName,
-				TrackID:     fmt.Sprintf("type_%s", string(groupDetectionType)),
+				CameraID:    "GLOBAL",
+				ProjectName: "PPE",
+				TrackID:     "GLOBAL",
 			}
 
 			if !s.CheckCooldown(cooldownKey, groupDecision.CooldownType) {
@@ -215,11 +216,7 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 		}
 
 		// Use a stable per-camera/project/type cooldown key to throttle alerts across frames
-		cooldownKey := models.AlertCooldownKey{
-			CameraID:    cameraID,
-			ProjectName: primaryDetection.ProjectName,
-			TrackID:     fmt.Sprintf("type_%s", string(groupDetectionType)),
-		}
+		cooldownKey := models.AlertCooldownKey{CameraID: cameraID, ProjectName: primaryDetection.ProjectName, TrackID: fmt.Sprintf("type_%s", string(groupDetectionType))}
 
 		if !s.CheckCooldown(cooldownKey, decision.CooldownType) {
 			log.Debug().
@@ -278,7 +275,7 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 		Metadata:     make(map[string]interface{}),
 	}
 
-	// Handle anomaly detections using proper handler
+	// Handle anomaly detections using proper handlerShouldCreateAlert
 	if strings.Contains(strings.ToUpper(detection.Label), "ANOMALY") {
 		log.Debug().
 			Msg("Anomaly detection detected")
