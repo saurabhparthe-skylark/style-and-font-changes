@@ -6,8 +6,6 @@ import (
 
 	"kepler-worker-go/internal/helpers"
 	"kepler-worker-go/internal/models"
-
-	"github.com/rs/zerolog/log"
 )
 
 // HandleAnomalyDetection handles anomaly detection alerts
@@ -25,23 +23,11 @@ func HandleAnomalyDetection(detection models.Detection, decision models.AlertDec
 	decision.Metadata["anomaly_confidence"] = detection.Score
 	decision.Metadata["detection_method"] = "anomaly_detection"
 
-	log.Info().
-		Int32("track_id", detection.TrackID).
-		Str("anomaly_type", detection.Label).
-		Float32("confidence", detection.Score).
-		Msg("Anomaly detection alert will be created")
-
 	return decision
 }
 
 // BuildAnomalyAlert creates a complete anomaly alert payload with images
 func BuildAnomalyAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
-	log.Info().
-		Str("camera_id", cameraID).
-		Int32("track_id", detection.TrackID).
-		Str("anomaly_type", detection.Label).
-		Float32("confidence", detection.Score).
-		Msg("🏗️ Building anomaly alert with images")
 
 	// Create alert decision
 	decision := models.AlertDecision{

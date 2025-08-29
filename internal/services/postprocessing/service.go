@@ -305,6 +305,9 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 	case models.DetectionTypeFireSmoke:
 		return alerts.HandleFireSmokeDetection(detection, decision)
 
+	case models.DetectionTypePerson:
+		return alerts.HandlePersonDetection(detection, decision)
+
 	case models.DetectionTypeGeneral:
 		// Intrusion flag can be present on general/person detections
 		if detection.IsIntrusion != nil && *detection.IsIntrusion {
@@ -350,6 +353,9 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 
 	case models.AlertTypeSelfLearned:
 		payload = alerts.BuildConsolidatedSelfLearningAlert(detections, cameraID, rawFrameData, annotatedFrameData)
+
+	case models.AlertTypePersonDetection, models.AlertTypeIntrusionDetection:
+		payload = alerts.BuildConsolidatedPersonAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeHighConfidence:
 		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, rawFrameData, annotatedFrameData)
@@ -422,15 +428,6 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 			Msg("Failed to publish consolidated alert")
 		return err
 	}
-
-	processingTime := time.Since(start)
-	log.Info().
-		Str("camera_id", cameraID).
-		Int("detection_count", len(detections)).
-		Str("alert_type", string(payload.Alert.AlertType)).
-		Str("severity", string(payload.Alert.Severity)).
-		Dur("processing_time", processingTime).
-		Msg("🚀 Consolidated alert published successfully")
 
 	return nil
 }
@@ -542,6 +539,8 @@ func (s *Service) getDetectionType(projectName, label string) models.DetectionTy
 		return models.DetectionTypeThermal
 	case strings.Contains(projectLower, "fire_smoke"):
 		return models.DetectionTypeFireSmoke
+	case strings.Contains(projectLower, "person_detection") || strings.Contains(projectLower, "people_counter") || strings.Contains(projectLower, "person_detection_lr") || strings.Contains(projectLower, "person_detection_sr"):
+		return models.DetectionTypePerson
 	}
 
 	// Label based mapping (secondary)
@@ -556,6 +555,8 @@ func (s *Service) getDetectionType(projectName, label string) models.DetectionTy
 		return models.DetectionTypeVehicle
 	case strings.Contains(labelLower, "fire") || strings.Contains(labelLower, "smoke"):
 		return models.DetectionTypeFireSmoke
+	case strings.Contains(labelLower, "person") || strings.Contains(labelLower, "people"):
+		return models.DetectionTypePerson
 	default:
 		return models.DetectionTypeGeneral
 	}
@@ -628,6 +629,8 @@ func (s *Service) processSingleAlert(detection models.Detection, decision models
 		payload = alerts.BuildAnomalyAlert(detection, cameraID, rawFrameData)
 	case models.AlertTypeSelfLearned:
 		payload = alerts.BuildSelfLearningAlert(detection, cameraID, rawFrameData)
+	case models.AlertTypePersonDetection, models.AlertTypeIntrusionDetection:
+		payload = alerts.BuildPersonAlert(detection, cameraID, rawFrameData)
 	default:
 		payload = alerts.BuildGeneralAlert(detection, cameraID, rawFrameData)
 	}

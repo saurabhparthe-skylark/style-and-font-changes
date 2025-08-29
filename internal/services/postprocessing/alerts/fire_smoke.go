@@ -6,8 +6,6 @@ import (
 
 	"kepler-worker-go/internal/helpers"
 	"kepler-worker-go/internal/models"
-
-	"github.com/rs/zerolog/log"
 )
 
 // HandleFireSmokeDetection handles fire and smoke detection alerts
@@ -40,13 +38,6 @@ func HandleFireSmokeDetection(detection models.Detection, decision models.AlertD
 func BuildFireSmokeAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 	isFire := detection.IsFire != nil && *detection.IsFire
 	isSmoke := detection.IsSmoke != nil && *detection.IsSmoke
-
-	log.Info().
-		Str("camera_id", cameraID).
-		Int32("track_id", detection.TrackID).
-		Bool("is_fire", isFire).
-		Bool("is_smoke", isSmoke).
-		Msg("🏗️ Building fire/smoke alert with images")
 
 	// Create alert decision
 	decision := models.AlertDecision{

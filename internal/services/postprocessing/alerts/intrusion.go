@@ -5,8 +5,6 @@ import (
 
 	"kepler-worker-go/internal/helpers"
 	"kepler-worker-go/internal/models"
-
-	"github.com/rs/zerolog/log"
 )
 
 // HandleIntrusionDetection determines if an intrusion alert should be created
@@ -16,7 +14,7 @@ func HandleIntrusionDetection(detection models.Detection, decision models.AlertD
 	}
 
 	decision.ShouldAlert = true
-	decision.AlertType = models.AlertTypeIntrusion
+	decision.AlertType = models.AlertTypeIntrusionDetection
 	decision.Severity = models.AlertSeverityHigh
 	decision.Title = "Intrusion Detected"
 	decision.Description = fmt.Sprintf("Intrusion detected with %.1f%% confidence", detection.Score*100)
@@ -27,14 +25,10 @@ func HandleIntrusionDetection(detection models.Detection, decision models.AlertD
 
 // BuildIntrusionAlert creates a complete intrusion alert payload with images
 func BuildIntrusionAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
-	log.Info().
-		Str("camera_id", cameraID).
-		Int32("track_id", detection.TrackID).
-		Msg("🏗️ Building intrusion alert with images")
 
 	decision := models.AlertDecision{
 		ShouldAlert:  true,
-		AlertType:    models.AlertTypeIntrusion,
+		AlertType:    models.AlertTypeIntrusionDetection,
 		Severity:     models.AlertSeverityHigh,
 		Title:        "Intrusion Detected",
 		Description:  fmt.Sprintf("Intrusion detected with %.1f%% confidence", detection.Score*100),

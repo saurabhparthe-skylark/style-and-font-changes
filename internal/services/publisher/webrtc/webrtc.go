@@ -100,6 +100,11 @@ func (p *Publisher) getOrCreateMediaMTXStream(cameraID string, width, height int
 func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*MediaMTXStream, error) {
 	whipURL := fmt.Sprintf("%s/live/%s/whip", p.cfg.MediaMTXURL, cameraID)
 
+	// best-effort cleanup of any lingering WebRTC sessions or publishers on this path
+	if err := p.cleanupMediaMTXSessions(cameraID); err != nil {
+		log.Warn().Err(err).Str("camera_id", cameraID).Msg("Pre-publish cleanup failed; proceeding anyway")
+	}
+
 	whipClient := &http.Client{Timeout: p.cfg.WHIPTimeout}
 
 	api := webrtc.NewAPI()
@@ -145,9 +150,33 @@ func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*Med
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		pc.Close()
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("WHIP POST failed: %d - %s", resp.StatusCode, string(body))
+		// if conflict, try cleanup once and retry
+		if resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusLocked || resp.StatusCode == http.StatusForbidden {
+			body, _ := io.ReadAll(resp.Body)
+			log.Warn().Str("camera_id", cameraID).Int("status", resp.StatusCode).Msg("WHIP conflict; attempting cleanup and retry")
+			_ = p.cleanupMediaMTXSessions(cameraID)
+			// retry once
+			req2, _ := http.NewRequest(http.MethodPost, whipURL, strings.NewReader(pc.LocalDescription().SDP))
+			req2.Header.Set("Content-Type", "application/sdp")
+			req2.Header.Set("Accept", "application/sdp")
+			resp2, err2 := whipClient.Do(req2)
+			if err2 != nil {
+				pc.Close()
+				return nil, fmt.Errorf("failed WHIP POST after cleanup: %w", err2)
+			}
+			defer resp2.Body.Close()
+			if resp2.StatusCode != http.StatusCreated {
+				pc.Close()
+				body2, _ := io.ReadAll(resp2.Body)
+				return nil, fmt.Errorf("WHIP POST failed after cleanup: %d - %s (first: %d - %s)", resp2.StatusCode, string(body2), resp.StatusCode, string(body))
+			}
+			// replace resp with resp2 for the normal flow below
+			resp = resp2
+		} else {
+			pc.Close()
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("WHIP POST failed: %d - %s", resp.StatusCode, string(body))
+		}
 	}
 	answer, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -175,6 +204,11 @@ func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*Med
 		"-c:v", "libvpx",
 		"-deadline", "realtime",
 		"-cpu-used", "8",
+		"-lag-in-frames", "0",
+		"-error-resilient", "1",
+		"-g", "15",
+		"-row-mt", "1",
+		"-threads", "2",
 		"-b:v", bitrateArg,
 		"-f", "ivf",
 		"-loglevel", "error",
@@ -307,7 +341,7 @@ func (p *Publisher) processMediaMTXFrames(stream *MediaMTXStream) {
 			}
 
 			frameAge := time.Since(latestFrame.Timestamp)
-			if frameAge > 1*time.Second {
+			if frameAge > 250*time.Millisecond {
 				log.Debug().
 					Str("camera_id", stream.cameraID).
 					Dur("frame_age", frameAge).
@@ -526,4 +560,66 @@ func (p *Publisher) GetHLSURL(cameraID string) string {
 
 func (p *Publisher) GetRTSPURL(cameraID string) string {
 	return fmt.Sprintf("rtsp://localhost:8554/live/%s", cameraID)
+}
+
+// cleanupMediaMTXSessions attempts to remove any existing WebRTC sessions or publishers
+// for a given camera path to avoid WHIP/WHEP conflicts. It's best-effort and never fatal.
+func (p *Publisher) cleanupMediaMTXSessions(cameraID string) error {
+	apiBase := p.cfg.MediaMTXAPIURL
+	if apiBase == "" {
+		return nil
+	}
+
+	// Kick publisher on the path (best-effort)
+	path := fmt.Sprintf("live/%s", cameraID)
+	reqBody := strings.NewReader(fmt.Sprintf(`{"path":"%s"}`, path))
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/v3/paths/kick/publisher", apiBase), reqBody)
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		_, _ = http.DefaultClient.Do(req)
+	}
+
+	// List WebRTC sessions and delete ones that reference our path
+	listReq, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/v3/webrtcsessions/list", apiBase), nil)
+	if err != nil {
+		return nil
+	}
+	resp, err := http.DefaultClient.Do(listReq)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	s := string(body)
+	idx := 0
+	for {
+		pos := strings.Index(s[idx:], path)
+		if pos < 0 {
+			break
+		}
+		pos += idx
+		idKey := `"id":"`
+		start := strings.LastIndex(s[:pos], idKey)
+		if start >= 0 {
+			start += len(idKey)
+			end := strings.IndexByte(s[start:], '"')
+			if end > 0 {
+				sessionID := s[start : start+end]
+				kickURL := fmt.Sprintf("%s/v3/webrtcsessions/kick/%s", apiBase, sessionID)
+				kickReq, err2 := http.NewRequest(http.MethodPost, kickURL, nil)
+				if err2 == nil {
+					_, _ = http.DefaultClient.Do(kickReq)
+				}
+			}
+		}
+		idx = pos + len(path)
+	}
+	return nil
 }

@@ -23,9 +23,10 @@ type Config struct {
 	LogdyPort    int
 
 	// External Services
-	MediaMTXURL string
-	BackendURL  string
-	AIGRPCURL   string
+	MediaMTXURL    string
+	MediaMTXAPIURL string
+	BackendURL     string
+	AIGRPCURL      string
 
 	// NATS (for messaging and alerts)
 	// Default: nats://localhost:4222 (works with Docker Compose setup)
@@ -161,9 +162,10 @@ func Load() *Config {
 		LogdyPort:    getEnvInt("LOGDY_PORT", 8080),
 
 		// External Services
-		MediaMTXURL: getEnv("MEDIAMTX_URL", "http://localhost:8889"),
-		BackendURL:  getEnv("BACKEND_URL", "http://localhost:8500"),
-		AIGRPCURL:   getEnv("AI_GRPC_URL", "192.168.1.76:50052"),
+		MediaMTXURL:    getEnv("MEDIAMTX_URL", "http://localhost:8889"),
+		MediaMTXAPIURL: getEnv("MEDIAMTX_API_URL", "http://localhost:9997"),
+		BackendURL:     getEnv("BACKEND_URL", "http://localhost:8500"),
+		AIGRPCURL:      getEnv("AI_GRPC_URL", "192.168.1.76:50052"),
 
 		// NATS (configured for Docker Compose setup)
 		NatsURL:            getNatsURL(),

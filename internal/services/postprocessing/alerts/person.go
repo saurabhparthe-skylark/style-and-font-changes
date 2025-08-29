@@ -2,7 +2,6 @@ package alerts
 
 import (
 	"fmt"
-	"strings"
 
 	"kepler-worker-go/internal/helpers"
 	"kepler-worker-go/internal/models"
@@ -10,38 +9,58 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// HandleGeneralDetection handles general high-confidence detections
-func HandleGeneralDetection(detection models.Detection, decision models.AlertDecision) models.AlertDecision {
+// HandlePersonDetection handles person detection alerts
+func HandlePersonDetection(detection models.Detection, decision models.AlertDecision) models.AlertDecision {
+	// Check if this is a high-confidence person detection or has send_alert flag
 	if detection.Score < 0.7 && !detection.SendAlert {
 		return decision
 	}
 
 	decision.ShouldAlert = true
-	decision.AlertType = models.AlertTypeHighConfidence
+	decision.AlertType = models.AlertTypePersonDetection
 	decision.Severity = models.AlertSeverityMedium
-	decision.Title = fmt.Sprintf("%s Detection", strings.Title(detection.Label))
-	decision.Description = fmt.Sprintf("%s detected with %.1f%% confidence", detection.Label, detection.Score*100)
+	decision.Title = "Person Detection"
+	decision.Description = fmt.Sprintf("Person detected with %.1f%% confidence", detection.Score*100)
+	decision.CooldownType = "normal"
 	decision.Metadata["detection_confidence"] = detection.Score
 	decision.Metadata["send_alert_flag"] = detection.SendAlert
+
+	// Check for intrusion flag
+	if detection.IsIntrusion != nil && *detection.IsIntrusion {
+		decision.AlertType = models.AlertTypeIntrusionDetection
+		decision.Severity = models.AlertSeverityHigh
+		decision.Title = "Intrusion Alert"
+		decision.Description = fmt.Sprintf("Unauthorized person detected with %.1f%% confidence", detection.Score*100)
+		decision.Metadata["intrusion_detected"] = true
+	}
 
 	return decision
 }
 
-// BuildGeneralAlert creates a complete general alert payload with images
-func BuildGeneralAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
+// BuildPersonAlert creates a complete person alert payload with images
+func BuildPersonAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
 
 	// Create alert decision
 	decision := models.AlertDecision{
 		ShouldAlert:  true,
-		AlertType:    models.AlertTypeHighConfidence,
+		AlertType:    models.AlertTypePersonDetection,
 		Severity:     models.AlertSeverityMedium,
-		Title:        fmt.Sprintf("%s Detection", strings.Title(detection.Label)),
-		Description:  fmt.Sprintf("%s detected with %.1f%% confidence", detection.Label, detection.Score*100),
+		Title:        "Person Detection",
+		Description:  fmt.Sprintf("Person detected with %.1f%% confidence", detection.Score*100),
 		CooldownType: "normal",
 		Metadata:     make(map[string]interface{}),
 	}
 
-	// Add general-specific metadata
+	// Check for intrusion
+	if detection.IsIntrusion != nil && *detection.IsIntrusion {
+		decision.AlertType = models.AlertTypeIntrusionDetection
+		decision.Severity = models.AlertSeverityHigh
+		decision.Title = "Intrusion Alert"
+		decision.Description = fmt.Sprintf("Unauthorized person detected with %.1f%% confidence", detection.Score*100)
+		decision.Metadata["intrusion_detected"] = true
+	}
+
+	// Add person-specific metadata
 	decision.Metadata["detection_confidence"] = detection.Score
 	decision.Metadata["send_alert_flag"] = detection.SendAlert
 	decision.Metadata["detection_label"] = detection.Label
@@ -67,45 +86,65 @@ func BuildGeneralAlert(detection models.Detection, cameraID string, frame []byte
 	}
 
 	// Add context image using helper
-	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "general alert")
+	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "person alert")
 
-	// Add detection image using helper with general-specific metadata (using raw frame)
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("general_alert_%d", detection.TrackID), map[string]interface{}{
+	// Add detection image using helper with person-specific metadata (using raw frame)
+	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("person_alert_%d", detection.TrackID), map[string]interface{}{
 		"alert_type":      decision.AlertType,
 		"detection_label": detection.Label,
 		"send_alert_flag": detection.SendAlert,
+		"is_intrusion":    detection.IsIntrusion != nil && *detection.IsIntrusion,
 	})
 
 	return payload
 }
 
-// BuildConsolidatedGeneralAlert creates a consolidated general alert for multiple detections
-func BuildConsolidatedGeneralAlert(detections []models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
+// BuildConsolidatedPersonAlert creates a consolidated person alert for multiple detections
+func BuildConsolidatedPersonAlert(detections []models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 	if len(detections) == 0 {
-		log.Warn().Str("camera_id", cameraID).Msg("No detections provided for consolidated general alert")
+		log.Warn().Str("camera_id", cameraID).Msg("No detections provided for consolidated person alert")
 		return models.AlertPayload{}
 	}
 
 	// Get the primary detection (highest confidence) for main alert info
-	primaryDetection := findHighestConfidenceDetection(detections)
+	primaryDetection := findHighestConfidencePersonDetection(detections)
 	totalDetections := len(detections)
+
+	// Check if any detection has intrusion flag
+	hasIntrusion := false
+	for _, det := range detections {
+		if det.IsIntrusion != nil && *det.IsIntrusion {
+			hasIntrusion = true
+			break
+		}
+	}
 
 	// Create alert decision
 	decision := models.AlertDecision{
 		ShouldAlert:  true,
-		AlertType:    models.AlertTypeHighConfidence,
+		AlertType:    models.AlertTypePersonDetection,
 		Severity:     models.AlertSeverityMedium,
-		Title:        fmt.Sprintf("%s Detection (%d objects)", strings.Title(primaryDetection.Label), totalDetections),
-		Description:  fmt.Sprintf("%d %s objects detected with high confidence", totalDetections, primaryDetection.Label),
+		Title:        fmt.Sprintf("Person Detection (%d people)", totalDetections),
+		Description:  fmt.Sprintf("%d people detected with high confidence", totalDetections),
 		CooldownType: "normal",
 		Metadata:     make(map[string]interface{}),
 	}
 
-	// Add general-specific metadata
+	// Override for intrusion
+	if hasIntrusion {
+		decision.AlertType = models.AlertTypeIntrusionDetection
+		decision.Severity = models.AlertSeverityHigh
+		decision.Title = fmt.Sprintf("Intrusion Alert (%d people)", totalDetections)
+		decision.Description = fmt.Sprintf("%d unauthorized people detected", totalDetections)
+		decision.Metadata["intrusion_detected"] = true
+	}
+
+	// Add person-specific metadata
 	decision.Metadata["detection_confidence"] = primaryDetection.Score
 	decision.Metadata["send_alert_flag"] = primaryDetection.SendAlert
 	decision.Metadata["detection_label"] = primaryDetection.Label
 	decision.Metadata["total_detections"] = totalDetections
+	decision.Metadata["has_intrusion"] = hasIntrusion
 
 	// Build alert payload using primary detection for core info
 	payload := models.AlertPayload{
@@ -128,30 +167,31 @@ func BuildConsolidatedGeneralAlert(detections []models.Detection, cameraID strin
 	}
 
 	// Add context image using annotated frame (shows full scene with overlays)
-	helpers.AddContextImage(&payload, annotatedFrame, cameraID, primaryDetection.TrackID, "Consolidated general alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, primaryDetection.TrackID, "Consolidated person alert")
 
 	// Add detection images: primary from annotated (with overlays), others from raw (clean)
 	for i, detection := range detections {
 		frameForCrop := rawFrame
 		if detection.TrackID == primaryDetection.TrackID {
-			frameForCrop = annotatedFrame
+			frameForCrop = rawFrame // Use raw frame for ALL detection crops
 		}
 		helpers.AddDetectionImage(&payload, detection, frameForCrop, cameraID,
-			fmt.Sprintf("general_consolidated_%d_%d", detection.TrackID, i),
+			fmt.Sprintf("person_consolidated_%d_%d", detection.TrackID, i),
 			map[string]interface{}{
 				"alert_type":       decision.AlertType,
 				"detection_label":  detection.Label,
 				"send_alert_flag":  detection.SendAlert,
 				"detection_index":  i,
 				"total_detections": totalDetections,
+				"is_intrusion":     detection.IsIntrusion != nil && *detection.IsIntrusion,
 			})
 	}
 
 	return payload
 }
 
-// Helper function to find highest confidence detection
-func findHighestConfidenceDetection(detections []models.Detection) models.Detection {
+// Helper function to find highest confidence person detection
+func findHighestConfidencePersonDetection(detections []models.Detection) models.Detection {
 	if len(detections) == 1 {
 		return detections[0]
 	}

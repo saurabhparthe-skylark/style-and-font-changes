@@ -6,8 +6,6 @@ import (
 
 	"kepler-worker-go/internal/helpers"
 	"kepler-worker-go/internal/models"
-
-	"github.com/rs/zerolog/log"
 )
 
 // HandleSelfLearningDetection handles self-learning detection alerts
@@ -26,25 +24,11 @@ func HandleSelfLearningDetection(detection models.Detection, decision models.Ale
 	decision.Metadata["detection_method"] = "self_learning"
 	decision.Metadata["is_rpn_detection"] = detection.IsRPN
 
-	log.Info().
-		Int32("track_id", detection.TrackID).
-		Str("learned_pattern", detection.Label).
-		Float32("confidence", detection.Score).
-		Bool("is_rpn", detection.IsRPN).
-		Msg("Self-learning detection alert will be created")
-
 	return decision
 }
 
 // BuildSelfLearningAlert creates a complete self-learning alert payload with images
 func BuildSelfLearningAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
-	log.Info().
-		Str("camera_id", cameraID).
-		Int32("track_id", detection.TrackID).
-		Str("learned_pattern", detection.Label).
-		Float32("confidence", detection.Score).
-		Bool("is_rpn", detection.IsRPN).
-		Msg("🏗️ Building self-learning alert with images")
 
 	// Create alert decision
 	decision := models.AlertDecision{

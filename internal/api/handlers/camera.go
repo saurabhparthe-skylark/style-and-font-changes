@@ -229,9 +229,20 @@ func (h *CameraHandler) RestartCamera(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found"})
 			return
 		}
-		log.Error().Err(err).Str("camera_id", cameraID).Msg("restart_camera_failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+
+		// If restart is already in progress, try force restart as fallback
+		if err.Error() == fmt.Sprintf("restart already in progress for camera %s", cameraID) {
+			log.Warn().Str("camera_id", cameraID).Msg("Normal restart failed, attempting force restart")
+			if forceErr := h.cameraManager.ForceRestartCamera(cameraID); forceErr != nil {
+				log.Error().Err(forceErr).Str("camera_id", cameraID).Msg("force_restart_camera_failed")
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to restart camera: " + forceErr.Error()})
+				return
+			}
+		} else {
+			log.Error().Err(err).Str("camera_id", cameraID).Msg("restart_camera_failed")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	// Return updated camera details after restart
@@ -243,6 +254,47 @@ func (h *CameraHandler) RestartCamera(c *gin.Context) {
 	}
 
 	log.Info().Str("camera_id", cameraID).Msg("camera_restarted_successfully")
+	c.JSON(http.StatusOK, camera)
+}
+
+// ForceRestartCamera godoc
+// @Summary Force restart a camera
+// @Description Force a complete restart of a camera, even if it's stuck in restarting state
+// @Tags cameras
+// @Accept json
+// @Produce json
+// @Param camera_id path string true "Camera ID"
+// @Success 200 {object} models.CameraResponse
+// @Failure 400 {object} models.ErrorResponse
+// @Failure 404 {object} models.ErrorResponse
+// @Failure 500 {object} models.ErrorResponse
+// @Router /cameras/{camera_id}/force-restart [post]
+func (h *CameraHandler) ForceRestartCamera(c *gin.Context) {
+	cameraID := c.Param("camera_id")
+	if cameraID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "camera_id is required"})
+		return
+	}
+
+	if err := h.cameraManager.ForceRestartCamera(cameraID); err != nil {
+		if err.Error() == fmt.Sprintf("camera %s not found", cameraID) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Camera not found"})
+			return
+		}
+		log.Error().Err(err).Str("camera_id", cameraID).Msg("force_restart_camera_failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Return updated camera details after force restart
+	camera, err := h.cameraManager.GetCamera(cameraID)
+	if err != nil {
+		log.Error().Err(err).Str("camera_id", cameraID).Msg("get_camera_after_force_restart_failed")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Camera force restarted but failed to get updated details"})
+		return
+	}
+
+	log.Info().Str("camera_id", cameraID).Msg("camera_force_restarted_successfully")
 	c.JSON(http.StatusOK, camera)
 }
 

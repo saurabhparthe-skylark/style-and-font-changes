@@ -243,9 +243,39 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 		if det.Score < 0.5 {
 			detColor.A = 128
 		}
-		gocv.Rectangle(mat, image.Rect(x1, y1, x2, y2), detColor, 2)
-		cornerLength := 15
-		cornerThickness := 3
+
+		// gocv.Rectangle(mat, image.Rect(x1, y1, x2, y2), detColor, 2)
+		// cornerLength := 15
+		// cornerThickness := 3
+
+		// Adaptive thickness based on object size and type
+		boxWidth := x2 - x1
+		boxHeight := y2 - y1
+		boxArea := boxWidth * boxHeight
+
+		var thickness, cornerThickness int
+		var cornerLength int
+
+		// Smaller objects like license plates get thinner borders
+		if det.Label == "license_plate" || det.Label == "numberplate" {
+			thickness = 1
+			cornerThickness = 1
+			cornerLength = 8
+		} else if det.Label == "face" || boxArea < 2000 { // Small objects
+			thickness = 1
+			cornerThickness = 2
+			cornerLength = 10
+		} else if boxArea < 10000 { // Medium objects
+			thickness = 2
+			cornerThickness = 2
+			cornerLength = 12
+		} else { // Large objects
+			thickness = 2
+			cornerThickness = 3
+			cornerLength = 15
+		}
+
+		gocv.Rectangle(mat, image.Rect(x1, y1, x2, y2), detColor, thickness)
 		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1+cornerLength, y1), detColor, cornerThickness)
 		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1, y1+cornerLength), detColor, cornerThickness)
 		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2-cornerLength, y1), detColor, cornerThickness)

@@ -18,21 +18,23 @@ import (
 	"kepler-worker-go/internal/services/postprocessing"
 	"kepler-worker-go/internal/services/publisher"
 	"kepler-worker-go/internal/services/recorder"
+
+	// "kepler-worker-go/internal/services/recorder"
 	"kepler-worker-go/internal/services/streamcapture"
 )
 
-// CameraManager manages the entire camera pipeline
+// CameraManager manages the entire camera pipeline with production-grade lifecycle management
 type CameraManager struct {
 	cfg *config.Config
 
-	cameras map[string]*models.Camera
+	cameras map[string]*CameraLifecycle
 	mutex   sync.RWMutex
 
 	// Pipeline components
 	frameProcessor   *frameprocessing.FrameProcessor
 	publisherSvc     *publisher.Service // Unified publisher service (MJPEG + WebRTC)
 	streamCaptureSvc *streamcapture.Service
-	recorder         *recorder.Service
+	// recorder         *recorder.Service
 
 	stopChannel chan struct{}
 
@@ -54,12 +56,12 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 	streamCaptureSvc := streamcapture.NewService(cfg)
 
 	cm := &CameraManager{
-		cfg:                   cfg,
-		cameras:               make(map[string]*models.Camera),
-		frameProcessor:        frameProcessor,
-		publisherSvc:          publisherSvc,
-		streamCaptureSvc:      streamCaptureSvc,
-		recorder:              recorderSvc,
+		cfg:              cfg,
+		cameras:          make(map[string]*CameraLifecycle),
+		frameProcessor:   frameProcessor,
+		publisherSvc:     publisherSvc,
+		streamCaptureSvc: streamCaptureSvc,
+		// recorder:              recorderSvc,
 		stopChannel:           make(chan struct{}),
 		postProcessingService: postProcessingSvc,
 	}
@@ -80,18 +82,21 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 	return cm, nil
 }
 
-// StartCamera starts a camera with full pipeline
+// StartCamera starts a camera with production-grade lifecycle management
 func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
 	// Check if camera already exists
-	if camera, exists := cm.cameras[req.CameraID]; exists {
-		if camera.IsActive {
-			return fmt.Errorf("camera %s is already active", req.CameraID)
+	if lifecycle, exists := cm.cameras[req.CameraID]; exists {
+		if lifecycle.getState() == StateRunning {
+			return fmt.Errorf("camera %s is already running", req.CameraID)
 		}
 		// Stop existing camera before restarting
-		cm.stopCameraInternal(camera)
+		if err := lifecycle.Stop(); err != nil {
+			log.Warn().Err(err).Str("camera_id", req.CameraID).Msg("Failed to stop existing camera")
+		}
+		delete(cm.cameras, req.CameraID)
 	}
 
 	// Validate maximum cameras
@@ -121,12 +126,12 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	// Configure status - always start when creating a new camera
 	status := models.CameraStatusStart
 
-	// Create camera with pipeline channels
+	// Create camera with configuration
 	camera := &models.Camera{
 		ID:        req.CameraID,
 		URL:       req.URL,
 		Projects:  req.Projects,
-		IsActive:  true,
+		IsActive:  false, // Will be set by lifecycle manager
 		CreatedAt: time.Now(),
 
 		// Status and Recording Configuration
@@ -145,12 +150,6 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		FPSWindowSize:    30,
 		AIFrameCounter:   0,
 
-		RawFrames:       make(chan *models.RawFrame, cm.cfg.FrameBufferSize),
-		ProcessedFrames: make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer),
-		AlertFrames:     make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer),
-		RecorderFrames:  make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer),
-		StopChannel:     make(chan struct{}),
-
 		// Generate MediaMTX URLs
 		RTSPUrl:   cm.publisherSvc.GetRTSPURL(req.CameraID),
 		WebRTCUrl: cm.publisherSvc.GetWebRTCURL(req.CameraID),
@@ -158,16 +157,15 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		MJPEGUrl:  fmt.Sprintf("http://localhost:%d/mjpeg/%s", cm.cfg.Port, req.CameraID),
 	}
 
-	cm.cameras[req.CameraID] = camera
+	// Create lifecycle manager
+	lifecycle := NewCameraLifecycle(camera, cm)
+	cm.cameras[req.CameraID] = lifecycle
 
-	// Recording will be handled by runRecorderProcessor based on camera state
-
-	// Start pipeline components for this camera
-	go cm.runStreamReader(camera)
-	go cm.runFrameProcessor(camera)
-	go cm.runPublisher(camera)
-	go cm.runPostProcessor(camera)
-	// go cm.runRecorderProcessor(camera)
+	// Start the camera
+	if err := lifecycle.Start(); err != nil {
+		delete(cm.cameras, req.CameraID)
+		return fmt.Errorf("failed to start camera %s: %w", req.CameraID, err)
+	}
 
 	log.Info().
 		Str("camera_id", req.CameraID).
@@ -180,375 +178,9 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		Str("webrtc_url", camera.WebRTCUrl).
 		Str("hls_url", camera.HLSUrl).
 		Str("mjpeg_url", camera.MJPEGUrl).
-		Msg("Camera started with full enterprise pipeline and AI configuration")
+		Msg("Camera started with production-grade lifecycle management")
 
 	return nil
-}
-
-// runStreamReader runs OpenCV VideoCapture to read RTSP stream
-func (cm *CameraManager) runStreamReader(camera *models.Camera) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error().
-				Interface("panic", r).
-				Str("camera_id", camera.ID).
-				Msg("OpenCV reader panic recovered")
-			// slight delay before loop retries
-			time.Sleep(cm.cfg.PanicRestartDelay)
-		}
-	}()
-
-	// backoff state per camera
-	var attempt int
-
-	for {
-		select {
-		case <-camera.StopChannel:
-			return
-		default:
-			err := cm.streamCaptureSvc.StartVideoCaptureProcess(camera)
-			if err != nil {
-				log.Error().Err(err).Str("camera_id", camera.ID).Msg("VideoCapture process failed")
-				camera.ErrorCount++
-				attempt++
-
-				// jittered exponential backoff within configured min/max
-				delay := cm.streamCaptureSvc.CalculateBackoffDelay(attempt)
-				log.Info().Str("camera_id", camera.ID).Dur("retry_in", delay).Int("attempt", attempt).Msg("Reconnecting to camera")
-
-				select {
-				case <-camera.StopChannel:
-					return
-				case <-time.After(delay):
-					continue
-				}
-			} else {
-				// success path resets attempts
-				attempt = 0
-			}
-		}
-	}
-}
-
-// runFrameProcessor processes frames through AI and adds metadata
-func (cm *CameraManager) runFrameProcessor(camera *models.Camera) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error().
-				Interface("panic", r).
-				Str("camera_id", camera.ID).
-				Msg("Frame processor panic recovered")
-			// ensure we don't hot-loop restarts
-			time.Sleep(cm.cfg.PanicRestartDelay)
-		}
-	}()
-
-	// Create per-camera frame processor
-	frameProcessor, err := frameprocessing.NewFrameProcessorWithCamera(cm.cfg, camera)
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("camera_id", camera.ID).
-			Msg("Failed to create frame processor for camera")
-		return
-	}
-	defer frameProcessor.Shutdown()
-	for {
-		select {
-		case <-camera.StopChannel:
-			return
-		case rawFrame := <-camera.RawFrames:
-			// FRAME SKIPPING: Always get the latest frame by draining the buffer
-			var latestFrame *models.RawFrame = rawFrame
-			skippedFrames := 0
-
-			// Drain all pending frames to get the absolute latest
-		DrainLoop:
-			for {
-				select {
-				case newerFrame := <-camera.RawFrames:
-					latestFrame = newerFrame
-					skippedFrames++
-				default:
-					break DrainLoop
-				}
-			}
-
-			if skippedFrames > 0 {
-				log.Debug().
-					Str("camera_id", camera.ID).
-					Int("skipped_frames", skippedFrames).
-					Int64("latest_frame_id", latestFrame.FrameID).
-					Msg("Skipped frames for real-time processing")
-			}
-
-			startTime := time.Now()
-
-			// Update camera statistics first
-			camera.FPS = cm.streamCaptureSvc.CalculateFPS(camera)
-			camera.Latency = time.Since(latestFrame.Timestamp)
-
-			// Process the latest frame with current stats and per-camera AI settings
-			processedFrame := frameProcessor.ProcessFrame(latestFrame, camera.Projects, camera.FPS, camera.Latency)
-
-			// Update camera AI statistics
-			if processedFrame.AIDetections != nil {
-				if aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult); ok {
-					camera.AIProcessingTime = aiResult.ProcessingTime
-					camera.AIDetectionCount += int64(len(aiResult.Detections))
-
-					if aiResult.ErrorMessage != "" {
-						camera.LastAIError = aiResult.ErrorMessage
-						camera.ErrorCount++
-					} else if aiResult.FrameProcessed {
-						camera.LastAIError = "" // Clear error on successful processing
-					}
-				}
-			}
-
-			processingTime := time.Since(startTime)
-			log.Debug().
-				Str("camera_id", camera.ID).
-				Dur("processing_time", processingTime).
-				Bool("ai_enabled", camera.AIEnabled).
-				Int("skipped_frames", skippedFrames).
-				Msg("Frame processed with real-time optimization")
-
-			// Send to publisher
-			select {
-			case camera.ProcessedFrames <- processedFrame:
-			default:
-				// Drop frame if buffer is full for real-time streaming
-			}
-
-			// Send to alerts
-			select {
-			case camera.AlertFrames <- processedFrame:
-			default:
-				// Drop frame if buffer is full
-			}
-
-			// Send to recorder
-			select {
-			case camera.RecorderFrames <- processedFrame:
-			default:
-				// Drop frame if buffer is full
-			}
-		}
-	}
-}
-
-// runPublisher publishes frames to MediaMTX
-func (cm *CameraManager) runPublisher(camera *models.Camera) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error().
-				Interface("panic", r).
-				Str("camera_id", camera.ID).
-				Msg("Publisher panic recovered")
-			// ensure we don't hot-loop restarts
-			time.Sleep(cm.cfg.PanicRestartDelay)
-		}
-	}()
-
-	for {
-		select {
-		case <-camera.StopChannel:
-			return
-		case processedFrame := <-camera.ProcessedFrames:
-			// FRAME SKIPPING: drain to latest to keep real-time publishing
-			latestFrame := processedFrame
-			skipped := 0
-		DrainPub:
-			for {
-				select {
-				case newer := <-camera.ProcessedFrames:
-					latestFrame = newer
-					skipped++
-				default:
-					break DrainPub
-				}
-			}
-
-			if skipped > 0 {
-				log.Debug().
-					Str("camera_id", camera.ID).
-					Int("skipped_frames", skipped).
-					Int64("latest_frame_id", latestFrame.FrameID).
-					Msg("Publisher skipped frames to maintain real-time stream")
-			}
-
-			// Publish only the freshest frame to both MJPEG and WebRTC
-			err := cm.publisherSvc.PublishFrame(latestFrame)
-			if err != nil {
-				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish frame")
-				camera.ErrorCount++
-			}
-		}
-	}
-}
-
-// runPostProcessor processes frames for alerts in parallel to publishing
-func (cm *CameraManager) runPostProcessor(camera *models.Camera) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error().
-				Interface("panic", r).
-				Str("camera_id", camera.ID).
-				Msg("Post processor panic recovered")
-			// ensure we don't hot-loop restarts
-			time.Sleep(cm.cfg.PanicRestartDelay)
-		}
-	}()
-
-	for {
-		select {
-		case <-camera.StopChannel:
-			return
-		case processedFrame := <-camera.AlertFrames:
-			// Only process alerts if AI is enabled for this camera
-			if !camera.AIEnabled {
-				continue
-			}
-
-			// Use new post-processing service with detection-only processing
-			if cm.postProcessingService != nil {
-				aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult)
-				if !ok || len(aiResult.Detections) == 0 {
-					continue
-				}
-
-				// No conversion needed! Frame processor already outputs models.Detection
-				detections := aiResult.Detections
-
-				// Create frame metadata
-				frameMetadata := models.FrameMetadata{
-					FrameID:     processedFrame.FrameID,
-					Timestamp:   processedFrame.Timestamp,
-					Width:       processedFrame.Width,
-					Height:      processedFrame.Height,
-					AllDetCount: len(aiResult.Detections),
-					CameraID:    camera.ID,
-				}
-
-				// Use new detection-only processing with both raw and annotated frame data
-				result := cm.postProcessingService.ProcessDetections(
-					camera.ID,
-					detections,
-					frameMetadata,
-					processedFrame.RawData, // Raw frame data for clean crops
-					processedFrame.Data,    // Annotated frame data for context images
-				)
-
-				// Log processing results
-				if len(result.Errors) > 0 {
-					log.Warn().
-						Str("camera_id", camera.ID).
-						Strs("errors", result.Errors).
-						Msg("Alert processing had errors")
-				}
-
-				if result.AlertsCreated > 0 {
-					log.Debug().
-						Str("camera_id", camera.ID).
-						Int("alerts_created", result.AlertsCreated).
-						Int("valid_detections", result.ValidDetections).
-						Int("suppressed_detections", result.SuppressedDetections).
-						Msg("Alert processing completed")
-				}
-			}
-		}
-	}
-}
-
-// runRecorderProcessor processes frames for video recording in parallel
-func (cm *CameraManager) runRecorderProcessor(camera *models.Camera) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error().
-				Interface("panic", r).
-				Str("camera_id", camera.ID).
-				Msg("Recorder processor panic recovered")
-			time.Sleep(cm.cfg.PanicRestartDelay)
-		}
-	}()
-
-	// Track last recording state to detect changes
-	var lastRecordingState bool = false
-
-	for {
-		select {
-		case <-camera.StopChannel:
-			// Stop recording when camera stops
-			if cm.recorder != nil && camera.IsRecording {
-				if err := cm.recorder.StopRecording(camera.ID); err != nil {
-					log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to stop recording")
-				} else {
-					camera.IsRecording = false
-				}
-			}
-			return
-		case processedFrame := <-camera.RecorderFrames:
-			// FRAME SKIPPING: drain to the most recent frame to keep real-time
-			latestFrame := processedFrame
-			skipped := 0
-		DrainRec:
-			for {
-				select {
-				case newer := <-camera.RecorderFrames:
-					latestFrame = newer
-					skipped++
-				default:
-					break DrainRec
-				}
-			}
-			if skipped > 0 {
-				log.Debug().
-					Str("camera_id", camera.ID).
-					Int("skipped_frames", skipped).
-					Int64("latest_frame_id", latestFrame.FrameID).
-					Msg("Recorder skipped frames to maintain real-time")
-			}
-			// Determine if we should be recording based on camera state
-			shouldRecord := camera.EnableRecord &&
-				camera.Status != models.CameraStatusPaused &&
-				camera.Status != models.CameraStatusStop &&
-				camera.IsActive
-
-			// Handle recording state changes
-			if shouldRecord && !lastRecordingState && cm.recorder != nil {
-				// Start recording
-				if err := cm.recorder.StartRecording(camera.ID); err != nil {
-					log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to start recording")
-				} else {
-					camera.IsRecording = true
-					log.Info().Str("camera_id", camera.ID).Msg("Recording started")
-				}
-			} else if !shouldRecord && lastRecordingState && cm.recorder != nil {
-				// Stop recording
-				if err := cm.recorder.StopRecording(camera.ID); err != nil {
-					log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to stop recording")
-				} else {
-					camera.IsRecording = false
-					log.Info().Str("camera_id", camera.ID).Msg("Recording stopped")
-				}
-			}
-
-			lastRecordingState = shouldRecord
-
-			// Process only the freshest frame if we're actually recording
-			if camera.IsRecording && cm.recorder != nil {
-				if err := cm.recorder.ProcessFrame(camera.ID, latestFrame); err != nil {
-					// Only log as debug if it's just that recording is not active (expected behavior)
-					if err.Error() == fmt.Sprintf("camera %s is not recording", camera.ID) {
-						log.Debug().Str("camera_id", camera.ID).Msg("Skipping frame - recording not active")
-					} else {
-						log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to process frame for recording")
-					}
-				}
-			}
-		}
-	}
 }
 
 // Shutdown gracefully shuts down the camera manager
@@ -559,8 +191,10 @@ func (cm *CameraManager) Shutdown(ctx context.Context) error {
 	log.Info().Msg("Shutting down camera manager")
 
 	// Stop all cameras
-	for _, camera := range cm.cameras {
-		cm.stopCameraInternal(camera)
+	for cameraID, lifecycle := range cm.cameras {
+		if err := lifecycle.Stop(); err != nil {
+			log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to stop camera during shutdown")
+		}
 	}
 
 	// Stop watchdog
@@ -569,36 +203,17 @@ func (cm *CameraManager) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// stopCameraInternal stops camera internal processes
-func (cm *CameraManager) stopCameraInternal(camera *models.Camera) {
-	if camera == nil {
-		return
-	}
-
-	camera.IsActive = false
-
-	// Stop MediaMTX stream for this camera
-	if err := cm.publisherSvc.StopStream(camera.ID); err != nil {
-		log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to stop MediaMTX stream")
-	}
-
-	// Safely close all channels
-	cm.safeCloseStopChannel(camera.StopChannel, camera.ID)
-	cm.safeCloseRawFrames(camera.RawFrames, camera.ID)
-	cm.safeCloseProcessedFrames(camera.ProcessedFrames, camera.ID)
-	cm.safeCloseAlertFrames(camera.AlertFrames, camera.ID)
-	cm.safeCloseRecorderFrames(camera.RecorderFrames, camera.ID)
-}
-
 // GetCamera returns camera information
 func (cm *CameraManager) GetCamera(cameraID string) (*models.CameraResponse, error) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 
-	camera, exists := cm.cameras[cameraID]
+	lifecycle, exists := cm.cameras[cameraID]
 	if !exists {
 		return nil, fmt.Errorf("camera %s not found", cameraID)
 	}
+
+	camera := lifecycle.camera
 
 	return &models.CameraResponse{
 		CameraID:         camera.ID,
@@ -633,12 +248,16 @@ func (cm *CameraManager) StopCamera(cameraID string) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
-	camera, exists := cm.cameras[cameraID]
+	lifecycle, exists := cm.cameras[cameraID]
 	if !exists {
 		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	cm.stopCameraInternal(camera)
+	if err := lifecycle.Stop(); err != nil {
+		log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to stop camera")
+		return fmt.Errorf("failed to stop camera %s: %w", cameraID, err)
+	}
+
 	delete(cm.cameras, cameraID)
 
 	log.Info().Str("camera_id", cameraID).Msg("Camera stopped successfully")
@@ -651,8 +270,8 @@ func (cm *CameraManager) GetStats() (int, int) {
 	defer cm.mutex.RUnlock()
 
 	active := 0
-	for _, camera := range cm.cameras {
-		if camera.IsActive {
+	for _, lifecycle := range cm.cameras {
+		if lifecycle.getState() == StateRunning {
 			active++
 		}
 	}
@@ -666,7 +285,8 @@ func (cm *CameraManager) GetCameras() []*models.CameraResponse {
 	defer cm.mutex.RUnlock()
 
 	cameras := make([]*models.CameraResponse, 0, len(cm.cameras))
-	for _, camera := range cm.cameras {
+	for _, lifecycle := range cm.cameras {
+		camera := lifecycle.camera
 		cameras = append(cameras, &models.CameraResponse{
 			CameraID:         camera.ID,
 			URL:              camera.URL,
@@ -716,7 +336,7 @@ func (cm *CameraManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Check if camera exists
 	cm.mutex.RLock()
-	camera, exists := cm.cameras[cameraID]
+	lifecycle, exists := cm.cameras[cameraID]
 	cm.mutex.RUnlock()
 
 	if !exists {
@@ -724,8 +344,8 @@ func (cm *CameraManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !camera.IsActive {
-		http.Error(w, fmt.Sprintf("Camera %s is not active", cameraID), http.StatusServiceUnavailable)
+	if lifecycle.getState() != StateRunning {
+		http.Error(w, fmt.Sprintf("Camera %s is not running", cameraID), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -759,46 +379,46 @@ func (cm *CameraManager) checkCameraHealth() {
 	defer cm.mutex.RUnlock()
 
 	now := time.Now()
-	for _, camera := range cm.cameras {
-		if camera.IsActive && !camera.LastFrameTime.IsZero() {
+	for _, lifecycle := range cm.cameras {
+		camera := lifecycle.camera
+		if lifecycle.getState() == StateRunning && !camera.LastFrameTime.IsZero() {
 			timeSinceLastFrame := now.Sub(camera.LastFrameTime)
 			if timeSinceLastFrame > cm.cfg.FrameStaleThreshold {
 				log.Warn().
 					Str("camera_id", camera.ID).
 					Dur("time_since_last_frame", timeSinceLastFrame).
-					Msg("Camera appears to be stale - attempting realtime resync")
-				_ = cm.ResyncRealtime(camera.ID)
+					Msg("Camera appears to be stale - attempting restart")
+				_ = lifecycle.Restart()
 			}
 		}
 	}
 }
 
-// UpdateCameraSettings updates camera settings dynamically and restarts components as needed
+// UpdateCameraSettings updates camera settings dynamically
 func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.CameraUpsertRequest) error {
-	cm.mutex.Lock()
-	defer cm.mutex.Unlock()
+	cm.mutex.RLock()
+	lifecycle, exists := cm.cameras[cameraID]
+	cm.mutex.RUnlock()
 
-	camera, exists := cm.cameras[cameraID]
 	if !exists {
 		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	var needsStreamRestart bool
-	var needsFrameProcessorRestart bool
-	var needsCameraStop bool = false
-	var needsCameraStart bool = false
+	camera := lifecycle.camera
 
-	// Update URL if provided (requires restart of stream reader)
+	needsRestart := false
+
+	// Update URL if provided (requires restart)
 	if req.URL != nil && *req.URL != camera.URL {
 		oldURL := camera.URL
 		camera.URL = *req.URL
-		needsStreamRestart = true
+		needsRestart = true
 
 		log.Info().
 			Str("camera_id", cameraID).
 			Str("old_url", oldURL).
 			Str("new_url", *req.URL).
-			Msg("Camera URL updated, will restart stream reader")
+			Msg("Camera URL updated, will restart camera")
 	}
 
 	// Update projects
@@ -807,51 +427,31 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	}
 
 	// Update AI configuration
-	aiChanged := false
-	oldAIEnabled := camera.AIEnabled
-	oldAIEndpoint := camera.AIEndpoint
-	oldAITimeout := camera.AITimeout
-
 	if req.AIEnabled != nil && *req.AIEnabled != camera.AIEnabled {
+		oldAIEnabled := camera.AIEnabled
 		camera.AIEnabled = *req.AIEnabled
-		aiChanged = true
+		needsRestart = true
 		log.Info().
 			Str("camera_id", cameraID).
 			Bool("old_ai_enabled", oldAIEnabled).
 			Bool("new_ai_enabled", camera.AIEnabled).
-			Msg("AI enabled state changed")
+			Msg("AI enabled state changed, will restart camera")
 	}
 
 	if req.AIEndpoint != nil && *req.AIEndpoint != camera.AIEndpoint {
+		oldAIEndpoint := camera.AIEndpoint
 		camera.AIEndpoint = *req.AIEndpoint
-		aiChanged = true
+		needsRestart = true
 		log.Info().
 			Str("camera_id", cameraID).
 			Str("old_ai_endpoint", oldAIEndpoint).
 			Str("new_ai_endpoint", camera.AIEndpoint).
-			Msg("AI endpoint changed")
+			Msg("AI endpoint changed, will restart camera")
 	}
 
-	if aiChanged {
-		// Do not restart components on AI changes; frame processor lazily refreshes gRPC
-		needsFrameProcessorRestart = false
-		log.Info().
-			Str("camera_id", cameraID).
-			Bool("old_ai_enabled", oldAIEnabled).
-			Bool("new_ai_enabled", camera.AIEnabled).
-			Str("old_ai_endpoint", oldAIEndpoint).
-			Str("new_ai_endpoint", camera.AIEndpoint).
-			Dur("old_ai_timeout", oldAITimeout).
-			Dur("new_ai_timeout", camera.AITimeout).
-			Msg("AI configuration updated without restart (lazy refresh)")
-	}
-
-	// Update recording settings
+	// Update recording settings (no restart needed)
 	if req.EnableRecord != nil {
-		// oldEnableRecord := camera.EnableRecord
 		camera.EnableRecord = *req.EnableRecord
-
-		// Recording state changes will be handled by runRecorderProcessor
 	}
 
 	// Update status
@@ -860,194 +460,76 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 		camera.Status = *req.Status
 		camera.IsPaused = camera.Status == models.CameraStatusPaused
 
-		// Check if camera needs to be completely stopped
+		// Handle status changes
 		if camera.Status == models.CameraStatusStop {
-			needsCameraStop = true
 			log.Info().
 				Str("camera_id", cameraID).
 				Str("old_status", oldStatus.String()).
 				Str("new_status", camera.Status.String()).
-				Msg("Camera status changed to stop - will completely stop camera")
+				Msg("Camera status changed to stop")
+
+			return lifecycle.Stop()
 		}
 
-		// Check if camera needs to be started (was stopped and now starting)
-		if oldStatus == models.CameraStatusStop && camera.Status == models.CameraStatusStart && !camera.IsActive {
-			needsCameraStart = true
+		if oldStatus == models.CameraStatusStop && camera.Status == models.CameraStatusStart {
 			log.Info().
 				Str("camera_id", cameraID).
 				Str("old_status", oldStatus.String()).
 				Str("new_status", camera.Status.String()).
-				Msg("Camera status changed from stop to start - will restart camera")
-		}
+				Msg("Camera status changed from stop to start")
 
-		// Status change effects on recording will be handled by runRecorderProcessor
-	}
-
-	// Handle camera stop signal - completely stop the camera
-	if needsCameraStop {
-		log.Info().
-			Str("camera_id", cameraID).
-			Msg("Stopping camera completely due to status change")
-
-		// Stop camera internal processes
-		cm.stopCameraInternal(camera)
-
-		// Don't delete from cameras map as we want to keep the configuration
-		// Just mark as inactive
-		camera.IsActive = false
-
-		log.Info().
-			Str("camera_id", cameraID).
-			Str("status", camera.Status.String()).
-			Bool("is_active", camera.IsActive).
-			Msg("Camera stopped successfully due to status change")
-
-		return nil
-	}
-
-	// Handle camera start signal - restart stopped camera
-	if needsCameraStart {
-		log.Info().
-			Str("camera_id", cameraID).
-			Msg("Starting camera due to status change from stop to start")
-
-		// Reset camera state
-		camera.IsActive = true
-		camera.FrameCount = 0
-		camera.ErrorCount = 0
-		camera.LastFrameTime = time.Time{}
-		camera.RecentFrameTimes = make([]time.Time, 0, 30)
-		camera.AIFrameCounter = 0
-		camera.AIDetectionCount = 0
-		camera.LastAIError = ""
-
-		// Create new channels
-		camera.RawFrames = make(chan *models.RawFrame, cm.cfg.FrameBufferSize)
-		camera.ProcessedFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
-		camera.AlertFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
-		camera.RecorderFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
-		camera.StopChannel = make(chan struct{})
-
-		// Recording will be handled by runRecorderProcessor
-
-		// Start all pipeline components
-		go cm.runStreamReader(camera)
-		go cm.runFrameProcessor(camera)
-		go cm.runPublisher(camera)
-		go cm.runPostProcessor(camera)
-		go cm.runRecorderProcessor(camera)
-
-		log.Info().
-			Str("camera_id", cameraID).
-			Str("status", camera.Status.String()).
-			Bool("is_active", camera.IsActive).
-			Bool("is_recording", camera.IsRecording).
-			Msg("Camera started successfully due to status change")
-
-		return nil
-	}
-
-	// Apply component restarts if needed
-	if needsStreamRestart || needsFrameProcessorRestart {
-		log.Info().
-			Str("camera_id", cameraID).
-			Bool("restart_stream", needsStreamRestart).
-			Bool("restart_frame_processor", needsFrameProcessorRestart).
-			Msg("Restarting camera components due to configuration changes")
-
-		// Use internal restart without resetting statistics
-		if err := cm.restartCameraInternal(camera, false); err != nil {
-			log.Error().Err(err).Str("camera_id", cameraID).Msg("Failed to restart camera components")
-			return fmt.Errorf("failed to restart camera components: %w", err)
+			return lifecycle.Start()
 		}
 	}
 
-	// After non-restart updates, proactively drain queues to re-align to realtime
-	cm.drainCameraQueues(camera)
+	// If any critical settings changed, restart the camera
+	if needsRestart && lifecycle.getState() == StateRunning {
+		log.Info().
+			Str("camera_id", cameraID).
+			Msg("Restarting camera due to configuration changes")
+
+		return lifecycle.Restart()
+	}
 
 	log.Info().
 		Str("camera_id", cameraID).
 		Str("status", camera.Status.String()).
 		Bool("enable_record", camera.EnableRecord).
-		Bool("is_recording", camera.IsRecording).
 		Bool("is_paused", camera.IsPaused).
-		Bool("components_restarted", needsStreamRestart || needsFrameProcessorRestart).
-		Msg("Camera settings updated dynamically")
+		Bool("restarted", needsRestart).
+		Msg("Camera settings updated")
 
 	return nil
 }
 
-// restartCameraInternal performs camera restart with optional statistics reset
-func (cm *CameraManager) restartCameraInternal(camera *models.Camera, resetStats bool) error {
-	log.Info().
-		Str("camera_id", camera.ID).
-		Bool("reset_stats", resetStats).
-		Bool("ai_enabled", camera.AIEnabled).
-		Str("ai_endpoint", camera.AIEndpoint).
-		Msg("Starting camera restart")
-
-	// Stop the camera components
-	cm.stopCameraInternal(camera)
-
-	// Wait a moment for graceful shutdown
-	time.Sleep(200 * time.Millisecond)
-
-	// Create new channels
-	camera.RawFrames = make(chan *models.RawFrame, cm.cfg.FrameBufferSize)
-	camera.ProcessedFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
-	camera.AlertFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
-	camera.RecorderFrames = make(chan *models.ProcessedFrame, cm.cfg.PublishingBuffer)
-	camera.StopChannel = make(chan struct{})
-
-	// Reset camera state if requested (for hard restart)
-	if resetStats {
-		camera.FrameCount = 0
-		camera.ErrorCount = 0
-		camera.LastFrameTime = time.Time{}
-		camera.RecentFrameTimes = make([]time.Time, 0, 30)
-		camera.AIFrameCounter = 0
-		camera.AIDetectionCount = 0
-		camera.LastAIError = ""
-		log.Debug().Str("camera_id", camera.ID).Msg("Camera statistics reset")
-	}
-
-	// Set camera as active
-	camera.IsActive = true
-
-	// Recording will be handled by runRecorderProcessor
-	camera.IsRecording = false // Will be set by runRecorderProcessor when it actually starts
-
-	// Restart all pipeline components
-	go cm.runStreamReader(camera)
-	go cm.runFrameProcessor(camera)
-	go cm.runPublisher(camera)
-	go cm.runPostProcessor(camera)
-	// go cm.runRecorderProcessor(camera)
-
-	log.Info().
-		Str("camera_id", camera.ID).
-		Bool("reset_stats", resetStats).
-		Bool("ai_enabled", camera.AIEnabled).
-		Bool("recording_enabled", camera.IsRecording).
-		Msg("Camera restart completed successfully")
-
-	return nil
-}
-
-// RestartCamera performs a hard restart of the entire camera pipeline
+// RestartCamera performs a zero-downtime restart of the camera
 func (cm *CameraManager) RestartCamera(cameraID string) error {
-	cm.mutex.Lock()
-	defer cm.mutex.Unlock()
+	cm.mutex.RLock()
+	lifecycle, exists := cm.cameras[cameraID]
+	cm.mutex.RUnlock()
 
-	camera, exists := cm.cameras[cameraID]
 	if !exists {
 		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	log.Info().Str("camera_id", cameraID).Msg("Performing hard restart of camera")
+	log.Info().Str("camera_id", cameraID).Msg("Performing zero-downtime restart")
 
-	// Use internal restart with statistics reset
-	return cm.restartCameraInternal(camera, true)
+	return lifecycle.Restart()
+}
+
+// ForceRestartCamera forces a restart of the camera (for recovery from stuck states)
+func (cm *CameraManager) ForceRestartCamera(cameraID string) error {
+	cm.mutex.RLock()
+	lifecycle, exists := cm.cameras[cameraID]
+	cm.mutex.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("camera %s not found", cameraID)
+	}
+
+	log.Warn().Str("camera_id", cameraID).Msg("Forcing camera restart for recovery")
+
+	return lifecycle.ForceRestart()
 }
 
 // Safe channel closing helper functions to prevent "close of closed channel" panics
@@ -1061,134 +543,25 @@ func (cm *CameraManager) safeCloseStopChannel(ch chan struct{}, cameraID string)
 	close(ch)
 }
 
-func (cm *CameraManager) safeCloseRawFrames(ch chan *models.RawFrame, cameraID string) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Debug().Str("camera_id", cameraID).Msg("RawFrames channel already closed")
-		}
-	}()
-	close(ch)
-}
-
-func (cm *CameraManager) safeCloseProcessedFrames(ch chan *models.ProcessedFrame, cameraID string) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Debug().Str("camera_id", cameraID).Msg("ProcessedFrames channel already closed")
-		}
-	}()
-	close(ch)
-}
-
-func (cm *CameraManager) safeCloseAlertFrames(ch chan *models.ProcessedFrame, cameraID string) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Debug().Str("camera_id", cameraID).Msg("AlertFrames channel already closed")
-		}
-	}()
-	close(ch)
-}
-
-func (cm *CameraManager) safeCloseRecorderFrames(ch chan *models.ProcessedFrame, cameraID string) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Debug().Str("camera_id", cameraID).Msg("RecorderFrames channel already closed")
-		}
-	}()
-	close(ch)
-}
-
-// drainCameraQueues clears buffered frames to recover real-time after config updates
-func (cm *CameraManager) drainCameraQueues(camera *models.Camera) {
-	if camera == nil {
-		return
-	}
-
-	var rawDrained, procDrained, alertDrained, recDrained int
-
-	// Drain RawFrames
-	for {
-		select {
-		case <-camera.RawFrames:
-			rawDrained++
-		default:
-			goto DoneRaw
-		}
-	}
-DoneRaw:
-
-	// Drain ProcessedFrames
-	for {
-		select {
-		case <-camera.ProcessedFrames:
-			procDrained++
-		default:
-			goto DoneProc
-		}
-	}
-DoneProc:
-
-	// Drain AlertFrames
-	for {
-		select {
-		case <-camera.AlertFrames:
-			alertDrained++
-		default:
-			goto DoneAlert
-		}
-	}
-DoneAlert:
-
-	// Drain RecorderFrames
-	for {
-		select {
-		case <-camera.RecorderFrames:
-			recDrained++
-		default:
-			goto DoneRec
-		}
-	}
-DoneRec:
-
-	if rawDrained+procDrained+alertDrained+recDrained > 0 {
-		log.Debug().
-			Str("camera_id", camera.ID).
-			Int("raw_drained", rawDrained).
-			Int("processed_drained", procDrained).
-			Int("alert_drained", alertDrained).
-			Int("recorder_drained", recDrained).
-			Msg("Drained camera queues to maintain real-time after settings update")
-	}
-}
-
-// ResyncRealtime performs a lightweight resync: drain queues and reset publisher stream
+// ResyncRealtime performs a lightweight resync by restarting the camera
 func (cm *CameraManager) ResyncRealtime(cameraID string) error {
 	cm.mutex.RLock()
-	camera, exists := cm.cameras[cameraID]
+	lifecycle, exists := cm.cameras[cameraID]
 	cm.mutex.RUnlock()
-	if !exists || camera == nil {
+
+	if !exists {
 		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	if !camera.IsActive {
+	if lifecycle.getState() != StateRunning {
 		return nil
 	}
 
-	cm.drainCameraQueues(camera)
-
-	if cm.publisherSvc != nil {
-		go func(id string) {
-			_ = cm.publisherSvc.StopStream(id)
-		}(cameraID)
-	}
-
-	// Reset counters to avoid accumulating delay
-	camera.AIFrameCounter = 0
-	camera.RecentFrameTimes = make([]time.Time, 0, camera.FPSWindowSize)
-
 	log.Info().
 		Str("camera_id", cameraID).
-		Msg("Performed realtime resync: drained queues and reset publisher stream")
-	return nil
+		Msg("Performing realtime resync via restart")
+
+	return lifecycle.Restart()
 }
 
 // ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail

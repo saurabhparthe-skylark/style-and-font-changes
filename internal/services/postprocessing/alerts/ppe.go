@@ -70,22 +70,11 @@ func HandlePPEDetection(detection models.Detection, decision models.AlertDecisio
 	decision.Metadata["ppe_compliance"] = detection.Compliance
 	decision.Metadata["violation_count"] = len(violations)
 
-	log.Info().
-		Int32("track_id", detection.TrackID).
-		Int("violation_count", len(violations)).
-		Strs("violations", violations).
-		Msg("PPE violation alert will be created (derived)")
-
 	return decision
 }
 
 // BuildPPEAlert creates a complete PPE alert payload with images
 func BuildPPEAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
-	log.Info().
-		Str("camera_id", cameraID).
-		Int32("track_id", detection.TrackID).
-		Int("violation_count", len(detection.Violations)).
-		Msg("🏗️ Building PPE alert with images")
 
 	// Create alert decision first
 	decision := models.AlertDecision{
@@ -162,12 +151,6 @@ func BuildConsolidatedPPEAlert(detections []models.Detection, cameraID string, r
 
 	// Remove duplicates from violations list for title/description
 	uniqueViolations := removeDuplicateStrings(allViolations)
-
-	log.Info().
-		Str("camera_id", cameraID).
-		Int("total_detections", totalDetections).
-		Int("unique_violations", len(uniqueViolations)).
-		Msg("🏗️ Building consolidated PPE alert with multiple detections")
 
 	// Create alert decision with consolidated information
 	decision := models.AlertDecision{

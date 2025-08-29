@@ -23,11 +23,6 @@ func HandleVehicleDetection(detection models.Detection, decision models.AlertDec
 
 // BuildVehicleAlert creates a complete vehicle alert payload with images
 func BuildVehicleAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
-	log.Info().
-		Str("camera_id", cameraID).
-		Int32("track_id", detection.TrackID).
-		Str("vehicle_type", detection.Label).
-		Msg("🏗️ Building vehicle alert with images")
 
 	decision := models.AlertDecision{
 		ShouldAlert:  true,
@@ -91,12 +86,6 @@ func BuildConsolidatedVehicleAlert(detections []models.Detection, cameraID strin
 	for l := range labelCounts {
 		uniqueLabels = append(uniqueLabels, l)
 	}
-
-	log.Info().
-		Str("camera_id", cameraID).
-		Int("total_detections", len(detections)).
-		Int("unique_vehicle_types", len(uniqueLabels)).
-		Msg("🏗️ Building consolidated vehicle alert with multiple detections")
 
 	decision := models.AlertDecision{
 		ShouldAlert:  true,

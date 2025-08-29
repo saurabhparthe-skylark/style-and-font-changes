@@ -17,6 +17,7 @@ const (
 	DetectionTypeVehicle     DetectionType = "vehicle_detection"
 	DetectionTypeAnomaly     DetectionType = "anomaly_detection"
 	DetectionTypeSelfLearned DetectionType = "self_learned_detection"
+	DetectionTypePerson      DetectionType = "person_detection"
 	DetectionTypeGeneral     DetectionType = "general_detection"
 )
 
@@ -33,15 +34,16 @@ const (
 type AlertType string
 
 const (
-	AlertTypePPEViolation     AlertType = "PPE_VIOLATION"
-	AlertTypeCellphoneUsage   AlertType = "CELLPHONE_USAGE"
-	AlertTypeDroneDetection   AlertType = "DRONE_DETECTION"
-	AlertTypeFireSmoke        AlertType = "FIRE_SMOKE_DETECTION"
-	AlertTypeVehicleDetection AlertType = "VEHICLE_DETECTION"
-	AlertTypeAnomalyDetection AlertType = "ANOMALY_DETECTION"
-	AlertTypeSelfLearned      AlertType = "SELF_LEARNED_DETECTION"
-	AlertTypeHighConfidence   AlertType = "HIGH_CONFIDENCE_DETECTION"
-	AlertTypeIntrusion        AlertType = "INTRUSION_DETECTION"
+	AlertTypePPEViolation       AlertType = "PPE_VIOLATION"
+	AlertTypeCellphoneUsage     AlertType = "CELLPHONE_USAGE"
+	AlertTypeDroneDetection     AlertType = "DRONE_DETECTION"
+	AlertTypeFireSmoke          AlertType = "FIRE_SMOKE_DETECTION"
+	AlertTypeVehicleDetection   AlertType = "VEHICLE_DETECTION"
+	AlertTypeAnomalyDetection   AlertType = "ANOMALY_DETECTION"
+	AlertTypeSelfLearned        AlertType = "SELF_LEARNED_DETECTION"
+	AlertTypePersonDetection    AlertType = "PERSON_DETECTION"
+	AlertTypeHighConfidence     AlertType = "HIGH_CONFIDENCE_DETECTION"
+	AlertTypeIntrusionDetection AlertType = "INTRUSION_DETECTION"
 )
 
 // AlertSeverity represents the severity level of alerts
