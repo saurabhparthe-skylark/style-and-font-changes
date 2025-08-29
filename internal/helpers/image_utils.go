@@ -663,6 +663,7 @@ func AddDetectionImage(payload interface{}, detection models.Detection, frame []
 		"class_name":      detection.ClassName,
 		"project_name":    detection.ProjectName,
 		"detection_level": detection.DetectionLevel,
+		"model_name":      detection.ModelName,
 	}
 
 	// Add extra metadata
@@ -706,6 +707,7 @@ func CreateDetectionRecord(detection models.Detection) models.DetectionRecord {
 			"class_name":      detection.ClassName,
 			"project_name":    detection.ProjectName,
 			"detection_level": detection.DetectionLevel,
+			"model_name":      detection.ModelName,
 		},
 	}
 }
@@ -724,6 +726,7 @@ func CreateSuppressionRecord(detection models.Detection, suppressionType models.
 			"class_name":      detection.ClassName,
 			"project_name":    detection.ProjectName,
 			"detection_level": detection.DetectionLevel,
+			"model_name":      detection.ModelName,
 		},
 	}
 

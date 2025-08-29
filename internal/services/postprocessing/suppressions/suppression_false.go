@@ -58,6 +58,7 @@ func BuildFalseSuppression(detection models.Detection, cameraID string, frame []
 			DetectionType:       detection.ClassName,
 			TrackerID:           detection.TrackID,
 			ProjectName:         detection.ProjectName,
+			ModelName:           detection.ModelName,
 			Timestamp:           time.Now(),
 			CameraID:            cameraID,
 			FalseMatchID:        detection.FalseMatchID,

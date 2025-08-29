@@ -71,8 +71,7 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 		Bool("ai_enabled", cfg.AIEnabled).
 		Msg("Camera manager initialized with enterprise pipeline")
 
-	// Start watchdog once
-	cm.watchdogOnce.Do(func() { go cm.runWatchdog() })
+	// Watchdog disabled to avoid background interventions that could impact latency
 
 	return cm, nil
 }
@@ -353,8 +352,30 @@ func (cm *CameraManager) runPublisher(camera *models.Camera) {
 		case <-camera.StopChannel:
 			return
 		case processedFrame := <-camera.ProcessedFrames:
-			// Publish to both MJPEG and WebRTC via unified publisher service
-			err := cm.publisherSvc.PublishFrame(processedFrame)
+			// FRAME SKIPPING: drain to latest to keep real-time publishing
+			latestFrame := processedFrame
+			skipped := 0
+		DrainPub:
+			for {
+				select {
+				case newer := <-camera.ProcessedFrames:
+					latestFrame = newer
+					skipped++
+				default:
+					break DrainPub
+				}
+			}
+
+			if skipped > 0 {
+				log.Debug().
+					Str("camera_id", camera.ID).
+					Int("skipped_frames", skipped).
+					Int64("latest_frame_id", latestFrame.FrameID).
+					Msg("Publisher skipped frames to maintain real-time stream")
+			}
+
+			// Publish only the freshest frame to both MJPEG and WebRTC
+			err := cm.publisherSvc.PublishFrame(latestFrame)
 			if err != nil {
 				log.Error().Err(err).Str("camera_id", camera.ID).Msg("Failed to publish frame")
 				camera.ErrorCount++
@@ -464,6 +485,26 @@ func (cm *CameraManager) runRecorderProcessor(camera *models.Camera) {
 			}
 			return
 		case processedFrame := <-camera.RecorderFrames:
+			// FRAME SKIPPING: drain to the most recent frame to keep real-time
+			latestFrame := processedFrame
+			skipped := 0
+		DrainRec:
+			for {
+				select {
+				case newer := <-camera.RecorderFrames:
+					latestFrame = newer
+					skipped++
+				default:
+					break DrainRec
+				}
+			}
+			if skipped > 0 {
+				log.Debug().
+					Str("camera_id", camera.ID).
+					Int("skipped_frames", skipped).
+					Int64("latest_frame_id", latestFrame.FrameID).
+					Msg("Recorder skipped frames to maintain real-time")
+			}
 			// Determine if we should be recording based on camera state
 			shouldRecord := camera.EnableRecord &&
 				camera.Status != models.CameraStatusPaused &&
@@ -491,9 +532,9 @@ func (cm *CameraManager) runRecorderProcessor(camera *models.Camera) {
 
 			lastRecordingState = shouldRecord
 
-			// Process frame only if we're actually recording
+			// Process only the freshest frame if we're actually recording
 			if camera.IsRecording && cm.recorder != nil {
-				if err := cm.recorder.ProcessFrame(camera.ID, processedFrame); err != nil {
+				if err := cm.recorder.ProcessFrame(camera.ID, latestFrame); err != nil {
 					// Only log as debug if it's just that recording is not active (expected behavior)
 					if err.Error() == fmt.Sprintf("camera %s is not recording", camera.ID) {
 						log.Debug().Str("camera_id", camera.ID).Msg("Skipping frame - recording not active")
@@ -718,7 +759,8 @@ func (cm *CameraManager) checkCameraHealth() {
 				log.Warn().
 					Str("camera_id", camera.ID).
 					Dur("time_since_last_frame", timeSinceLastFrame).
-					Msg("Camera appears to be stale - no recent frames")
+					Msg("Camera appears to be stale - attempting realtime resync")
+				_ = cm.ResyncRealtime(camera.ID)
 			}
 		}
 	}
@@ -913,6 +955,9 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 		}
 	}
 
+	// After non-restart updates, proactively drain queues to re-align to realtime
+	cm.drainCameraQueues(camera)
+
 	log.Info().
 		Str("camera_id", cameraID).
 		Str("status", camera.Status.String()).
@@ -1043,6 +1088,100 @@ func (cm *CameraManager) safeCloseRecorderFrames(ch chan *models.ProcessedFrame,
 		}
 	}()
 	close(ch)
+}
+
+// drainCameraQueues clears buffered frames to recover real-time after config updates
+func (cm *CameraManager) drainCameraQueues(camera *models.Camera) {
+	if camera == nil {
+		return
+	}
+
+	var rawDrained, procDrained, alertDrained, recDrained int
+
+	// Drain RawFrames
+	for {
+		select {
+		case <-camera.RawFrames:
+			rawDrained++
+		default:
+			goto DoneRaw
+		}
+	}
+DoneRaw:
+
+	// Drain ProcessedFrames
+	for {
+		select {
+		case <-camera.ProcessedFrames:
+			procDrained++
+		default:
+			goto DoneProc
+		}
+	}
+DoneProc:
+
+	// Drain AlertFrames
+	for {
+		select {
+		case <-camera.AlertFrames:
+			alertDrained++
+		default:
+			goto DoneAlert
+		}
+	}
+DoneAlert:
+
+	// Drain RecorderFrames
+	for {
+		select {
+		case <-camera.RecorderFrames:
+			recDrained++
+		default:
+			goto DoneRec
+		}
+	}
+DoneRec:
+
+	if rawDrained+procDrained+alertDrained+recDrained > 0 {
+		log.Debug().
+			Str("camera_id", camera.ID).
+			Int("raw_drained", rawDrained).
+			Int("processed_drained", procDrained).
+			Int("alert_drained", alertDrained).
+			Int("recorder_drained", recDrained).
+			Msg("Drained camera queues to maintain real-time after settings update")
+	}
+}
+
+// ResyncRealtime performs a lightweight resync: drain queues and reset publisher stream
+func (cm *CameraManager) ResyncRealtime(cameraID string) error {
+	cm.mutex.RLock()
+	camera, exists := cm.cameras[cameraID]
+	cm.mutex.RUnlock()
+	if !exists || camera == nil {
+		return fmt.Errorf("camera %s not found", cameraID)
+	}
+
+	if !camera.IsActive {
+		return nil
+	}
+
+	cm.drainCameraQueues(camera)
+
+	if cm.publisherSvc != nil {
+		go func(id string) {
+			_ = cm.publisherSvc.StopStream(id)
+		}(cameraID)
+	}
+
+	// Reset counters to avoid accumulating delay
+	camera.AIFrameCounter = 0
+	camera.RecentFrameTimes = make([]time.Time, 0, camera.FPSWindowSize)
+
+	log.Info().
+		Str("camera_id", cameraID).
+		Msg("Performed realtime resync: drained queues and reset publisher stream")
+	return nil
 }
 
 // ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail

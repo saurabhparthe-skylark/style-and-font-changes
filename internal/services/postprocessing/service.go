@@ -361,9 +361,14 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 	}
 
-	// Add processing metadata
+	// Add model and processing metadata
 	if payload.Metadata == nil {
 		payload.Metadata = make(map[string]interface{})
+	}
+	// Choose a representative model name (highest confidence detection)
+	primaryForModel := s.findPrimaryDetection(detections)
+	if primaryForModel.ModelName != "" {
+		payload.Metadata["model_name"] = primaryForModel.ModelName
 	}
 	payload.Metadata["processing_time_ms"] = time.Since(start).Milliseconds()
 	payload.Metadata["frame_dimensions"] = map[string]interface{}{
@@ -460,9 +465,12 @@ func (s *Service) processSuppressionDirectly(detection models.Detection, decisio
 		return fmt.Errorf("unknown suppression type: %s", decision.SuppressionType)
 	}
 
-	// Add processing metadata
+	// Add model and processing metadata
 	if payload.Metadata == nil {
 		payload.Metadata = make(map[string]interface{})
+	}
+	if detection.ModelName != "" {
+		payload.Metadata["model_name"] = detection.ModelName
 	}
 	payload.Metadata["processing_time_ms"] = time.Since(start).Milliseconds()
 	payload.Metadata["frame_dimensions"] = map[string]interface{}{

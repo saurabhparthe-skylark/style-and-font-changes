@@ -450,10 +450,26 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		return
 	}
 	for projectName, projectDetections := range resp.Results {
+		// Map detection levels to model names from model_map
+		var primaryModelName, secondaryModelName, tertiaryModelName string
+		if projectDetections != nil {
+			if mm := projectDetections.GetModelMap(); mm != nil {
+				if v, ok := mm["primary_detections"]; ok {
+					primaryModelName = v
+				}
+				if v, ok := mm["secondary_detections"]; ok {
+					secondaryModelName = v
+				}
+				if v, ok := mm["tertiary_detections"]; ok {
+					tertiaryModelName = v
+				}
+			}
+		}
 		projectCount := 0
 		for _, det := range projectDetections.GetPrimaryDetections() {
 			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelPrimary)
 			if modelDet != nil {
+				modelDet.ModelName = primaryModelName
 				result.Detections = append(result.Detections, *modelDet)
 				projectCount++
 			}
@@ -461,6 +477,7 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		for _, det := range projectDetections.GetSecondaryDetections() {
 			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelSecondary)
 			if modelDet != nil {
+				modelDet.ModelName = secondaryModelName
 				result.Detections = append(result.Detections, *modelDet)
 				projectCount++
 			}
@@ -468,6 +485,7 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		for _, det := range projectDetections.GetTertiaryDetections() {
 			modelDet := fp.convertProtoToModels(det, projectName, models.DetectionLevelTertiary)
 			if modelDet != nil {
+				modelDet.ModelName = tertiaryModelName
 				result.Detections = append(result.Detections, *modelDet)
 				projectCount++
 			}

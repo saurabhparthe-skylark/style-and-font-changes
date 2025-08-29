@@ -71,6 +71,7 @@ func BuildTrueSuppression(detection models.Detection, cameraID string, frame []b
 			DetectionType:       detection.ClassName,
 			TrackerID:           detection.TrackID,
 			ProjectName:         detection.ProjectName,
+			ModelName:           detection.ModelName,
 			Timestamp:           time.Now(),
 			CameraID:            cameraID,
 			TrueMatchID:         detection.TrueMatchID,

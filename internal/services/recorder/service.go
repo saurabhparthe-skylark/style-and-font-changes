@@ -149,25 +149,33 @@ func (rs *Service) ProcessFrame(cameraID string, frame interface{}) error {
 	recorder.frameCount++
 	recorder.lastFrameTime = time.Now()
 
-	// Send frame to processing channel (non-blocking)
+	// Smooth latest-only enqueue: drain backlog, keep only the newest
+	for {
+		select {
+		case <-recorder.frameChannel:
+			// keep draining until empty
+		default:
+			goto EnqueueLatest
+		}
+	}
+
+EnqueueLatest:
 	select {
 	case recorder.frameChannel <- processedFrame:
 		return nil
 	default:
-		// If channel is full, drop older frames to prevent blocking
-		// Drain some frames first
+		// If still full, drop one and try once more
 		select {
 		case <-recorder.frameChannel:
-			// Dropped one frame, now try to add the new one
-			select {
-			case recorder.frameChannel <- processedFrame:
-				return nil
-			default:
-				log.Debug().Str("camera_id", cameraID).Msg("Dropped frame for recording (channel still full)")
-			}
 		default:
 		}
-		return nil
+		select {
+		case recorder.frameChannel <- processedFrame:
+			return nil
+		default:
+			// As last resort, drop this frame silently to stay realtime
+			return nil
+		}
 	}
 }
 
@@ -189,20 +197,30 @@ func (rs *Service) processFrames(recorder *CameraRecorder) {
 		return
 	}
 
-	frameCounter := 0
 	for {
 		select {
 		case <-recorder.stopCh:
 			return
-		case frame := <-recorder.frameChannel:
-			frameCounter++
-			// Only process every 3rd frame to reduce processing load
-			if frameCounter%3 != 0 {
-				continue
+		case first := <-recorder.frameChannel:
+			// Drain to the most recent frame to keep realtime
+			latest := first
+			skipped := 0
+		DrainLoop:
+			for {
+				select {
+				case newer := <-recorder.frameChannel:
+					latest = newer
+					skipped++
+				default:
+					break DrainLoop
+				}
+			}
+			if skipped > 0 {
+				log.Debug().Str("camera_id", recorder.CameraID).Int("skipped_frames", skipped).Msg("Recorder drained to latest for realtime")
 			}
 
-			// Process frame into video chunk
-			if err := rs.writeFrameToChunk(recorder, frame); err != nil {
+			// Process only the latest frame into video chunk
+			if err := rs.writeFrameToChunk(recorder, latest); err != nil {
 				log.Error().Err(err).Str("camera_id", recorder.CameraID).Msg("Failed to write frame to chunk")
 				// Don't return here, continue processing other frames
 			}
