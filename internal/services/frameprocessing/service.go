@@ -454,13 +454,13 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		var primaryModelName, secondaryModelName, tertiaryModelName string
 		if projectDetections != nil {
 			if mm := projectDetections.GetModelMap(); mm != nil {
-				if v, ok := mm["primary_detections"]; ok {
+				if v, ok := mm["primary"]; ok {
 					primaryModelName = v
 				}
-				if v, ok := mm["secondary_detections"]; ok {
+				if v, ok := mm["secondary"]; ok {
 					secondaryModelName = v
 				}
-				if v, ok := mm["tertiary_detections"]; ok {
+				if v, ok := mm["tertiary"]; ok {
 					tertiaryModelName = v
 				}
 			}

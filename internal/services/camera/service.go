@@ -71,7 +71,11 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 		Bool("ai_enabled", cfg.AIEnabled).
 		Msg("Camera manager initialized with enterprise pipeline")
 
-	// Watchdog disabled to avoid background interventions that could impact latency
+	// Start watchdog to keep streams fresh and recover from staleness
+	cm.watchdogOnce.Do(func() {
+		go cm.runWatchdog()
+		log.Info().Dur("interval", cm.cfg.HealthCheckInterval).Msg("Watchdog started")
+	})
 
 	return cm, nil
 }
@@ -559,6 +563,9 @@ func (cm *CameraManager) Shutdown(ctx context.Context) error {
 		cm.stopCameraInternal(camera)
 	}
 
+	// Stop watchdog
+	cm.safeCloseStopChannel(cm.stopChannel, "watchdog")
+
 	return nil
 }
 
@@ -1015,7 +1022,7 @@ func (cm *CameraManager) restartCameraInternal(camera *models.Camera, resetStats
 	go cm.runFrameProcessor(camera)
 	go cm.runPublisher(camera)
 	go cm.runPostProcessor(camera)
-	go cm.runRecorderProcessor(camera)
+	// go cm.runRecorderProcessor(camera)
 
 	log.Info().
 		Str("camera_id", camera.ID).
