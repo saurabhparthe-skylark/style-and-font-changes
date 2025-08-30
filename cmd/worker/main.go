@@ -12,7 +12,7 @@ import (
 
 	"kepler-worker-go/internal/api"
 	"kepler-worker-go/internal/config"
-	"kepler-worker-go/internal/logging"
+	// "kepler-worker-go/internal/logging"
 )
 
 func main() {
@@ -46,14 +46,14 @@ func setupLogging(cfg *config.Config) error {
 	out := zerolog.MultiLevelWriter(baseWriter)
 
 	// Optionally start Logdy and tee logs
-	if cfg.LogdyEnabled {
-		if lw, url, err := logging.StartLogdy(cfg); err == nil {
-			out = zerolog.MultiLevelWriter(baseWriter, lw)
-			log.Info().Str("logdy_url", url).Msg("Logdy web log viewer started")
-		} else {
-			log.Warn().Err(err).Msg("Failed to start Logdy; continuing without it")
-		}
-	}
+	// if cfg.LogdyEnabled {
+	// 	if lw, url, err := logging.StartLogdy(cfg); err == nil {
+	// 		out = zerolog.MultiLevelWriter(baseWriter, lw)
+	// 		log.Info().Str("logdy_url", url).Msg("Logdy web log viewer started")
+	// 	} else {
+	// 		log.Warn().Err(err).Msg("Failed to start Logdy; continuing without it")
+	// 	}
+	// }
 
 	log.Logger = log.Output(out)
 

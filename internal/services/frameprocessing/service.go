@@ -304,33 +304,18 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 	}
 
 	y := 30
+	// log.Info().Msgf("AI response: %v", solutionsMap)
+	// log.Info().Msgf("Projects: %v", projects)
 	for _, project := range projects {
 		switch project {
-		case "people_counter", "person_detection", "person_detection_lr":
-			// Get solution data or create default
-			if solution, exists := solutionsMap[project]; exists {
+		case "person_detection_lr":
+			//we get prople counter in person_derection_sr
+			if solution, exists := solutionsMap["people_counter"]; exists {
 				solutions.DrawPeopleCounter(mat, solution, &y)
-			} else {
-				// Default solution
-				defaultSolution := models.SolutionResults{CurrentCount: 0}
-				solutions.DrawPeopleCounter(mat, defaultSolution, &y)
 			}
-		case "intrusion_detection":
-			if solution, exists := solutionsMap[project]; exists {
-				solutions.DrawIntrusion(mat, solution, &y)
-			} else {
-				hasIntrusion := false
-				defaultSolution := models.SolutionResults{IntrusionDetected: &hasIntrusion}
-				solutions.DrawIntrusion(mat, defaultSolution, &y)
-			}
-		case "ppe_detection", "violation_detection":
-			if solution, exists := solutionsMap[project]; exists {
-				solutions.DrawPPE(mat, solution, &y)
-			} else {
-				hasViolation := false
-				defaultSolution := models.SolutionResults{ViolationDetected: &hasViolation}
-				solutions.DrawPPE(mat, defaultSolution, &y)
-			}
+			// if solution, exists := solutionsMap["intrusion_detection"]; exists {
+			// 	solutions.DrawPeopleCounter(mat, solution, &y)
+			// }
 		case "vehicle_detection":
 			if solution, exists := solutionsMap[project]; exists {
 				solutions.DrawVehicle(mat, solution, &y)
@@ -444,9 +429,6 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 		}
 		return ""
 	}()).Msg("AI response")
-
-	//print resp
-	// log.Info().Msgf("AI response: %v", resp)
 
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("AI service call failed: %v", err)
