@@ -5,49 +5,58 @@
 logLevel: info
 logDestinations: [stdout]
 
-# Global settings optimized for low latency
-readTimeout: 5s
-writeTimeout: 5s
-
 # API and metrics
 api: yes
-apiAddress: :9997
+apiAddress: 0.0.0.0:9997
 metrics: yes
-metricsAddress: :9998
+metricsAddress: 0.0.0.0:9998
+apiAllowOrigin: "*"
 
 # RTSP server
 rtsp: yes
-rtspAddress: :8554
+rtspAddress: 0.0.0.0:8554
 rtspTransports: ["tcp", "udp"]
 
 # RTMP server (for worker publishing)
-rtmp: yes
-rtmpAddress: :1935
+rtmp: no
+rtmpAddress: 0.0.0.0:1935
 
 # SRT server (ultra-low latency UDP-based streaming)
-srt: yes
-srtAddress: :8890
+srt: no
+srtAddress: 0.0.0.0:8890
 
 # HLS server
-hls: yes
-hlsAddress: :8888
+hls: no
+hlsAddress: 0.0.0.0:8888
 hlsAllowOrigin: "*"
 
 # WebRTC server optimized for low latency
 webrtc: yes
-webrtcAddress: :8889
+webrtcAddress: 0.0.0.0:8889
 webrtcAllowOrigin: "*"
-# Enable WHIP for WebRTC publishing (ultra-low latency)
-webrtcServerKey: ""
-webrtcServerCert: ""
-# ICE configuration for WebRTC (compatible format)
-webrtcICEServers:
-  - stun:stun.l.google.com:19302
+webrtcEncryption: no
+
+
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+  - url: stun:stun1.l.google.com:19302
+  - url: stun:stun2.l.google.com:19302
+
+webrtcLocalUDPAddress: 0.0.0.0:8200
+webrtcLocalTCPAddress: 0.0.0.0:8201
+
+readTimeout: 15s
+writeTimeout: 15s
+writeQueueSize: 1024
+udpMaxPayloadSize: 1472
+multicastRTPPort: 8002
+multicastRTCPPort: 8003
 
 # Path settings
 paths:
   # Allow all paths with minimal config
   ~^.*$:
+    source: publisher
     publishUser: ""
     publishPass: ""
     readUser: ""

@@ -41,56 +41,24 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-  # nats:
-  #   image: nats:2.10-alpine
-  #   container_name: kepler-nats
-  #   command: 
-  #     - "--config"
-  #     - "/etc/nats/nats.conf"
-  #   volumes:
-  #     - ./nats.conf:/etc/nats/nats.conf
-  #     - ./data/nats:/data
-  #     - ./logs/nats:/logs
-  #   ports:
-  #     - "4222:4222"   # Client connections
-  #     - "8222:8222"   # HTTP monitoring
-  #     - "6222:6222"   # Routing port for clustering
-  #   restart: unless-stopped
-  #   extra_hosts:
-  #     - "host.docker.internal:host-gateway"
-  #   healthcheck:
-  #     test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-  #   logging:
-  #     driver: "local"
-  #     options:
-  #       max-size: "15m"
-  #       max-file: "3"
   
-  mediamtx:
-    image: bluenviron/mediamtx:latest
+  kepler-mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
     container_name: kepler-mediamtx
     volumes:
-      - ./mediamtx.yml:/mediamtx.yml
-      - ./data/mediamtx:/recordings
+      - ./configs/mediamtx.yml:/mediamtx.yml:ro
+      - ./data/mediamtx/recordings:/recordings
       - ./logs/mediamtx:/logs
-    ports:
-      - "8889:8889"   # HTTP/WebRTC
-      - "1935:1935"   # RTMP
-      - "8554:8554"   # RTSP
-      - "8322:8322/udp" # RTP
-      - "8002:8000/udp" # WebRTC UDP
+    network_mode: host
     restart: unless-stopped
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8889"]
+      test: ['CMD', '/mediamtx', '--version']
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 20s
+    logging: *default-logging
+
 
 volumes:
   kepler-videos:
