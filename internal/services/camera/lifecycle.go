@@ -352,7 +352,7 @@ func (cl *CameraLifecycle) runCamera() {
 		Msg("Camera capture ended")
 }
 
-// runFrameProcessor processes frames
+// runFrameProcessor processes frames - gets latest available frame when ready
 func (cl *CameraLifecycle) runFrameProcessor() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -371,12 +371,39 @@ func (cl *CameraLifecycle) runFrameProcessor() {
 			if !ok {
 				return
 			}
-			cl.processFrame(rawFrame)
+
+			// SIMPLE: Just get the absolute latest frame available RIGHT NOW
+			latestFrame := rawFrame
+			drainedCount := 0
+
+			// Drain everything to get the absolute latest
+		GetLatest:
+			for {
+				select {
+				case newerFrame := <-cl.camera.RawFrames:
+					latestFrame = newerFrame
+					drainedCount++
+				default:
+					break GetLatest
+				}
+			}
+
+			if drainedCount > 0 {
+				log.Debug().
+					Str("camera_id", cl.camera.ID).
+					Int("skipped_old_frames", drainedCount).
+					Int64("latest_frame_id", latestFrame.FrameID).
+					Dur("latest_frame_age", time.Since(latestFrame.Timestamp)).
+					Msg("Processing latest available frame")
+			}
+
+			// Process the absolute latest frame
+			cl.processFrame(latestFrame)
+
 		case <-time.After(1 * time.Second):
 			continue
 		}
 	}
-
 }
 
 // processFrame processes a single frame simply
@@ -407,6 +434,9 @@ func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
 	var processedFrame *models.ProcessedFrame
 
 	if processor != nil {
+		// Measure AI processing time for debugging delay
+		aiStartTime := time.Now()
+
 		// Try frame processing with error protection
 		func() {
 			defer func() {
@@ -421,6 +451,18 @@ func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
 
 			processedFrame = processor.ProcessFrame(rawFrame, cl.camera.Projects, cl.camera.FPS, cl.camera.Latency)
 		}()
+
+		aiProcessingDuration := time.Since(aiStartTime)
+
+		if aiProcessingDuration > 100*time.Millisecond {
+			log.Debug().
+				Str("camera_id", cl.camera.ID).
+				Int64("frame_id", rawFrame.FrameID).
+				Dur("ai_processing_time", aiProcessingDuration).
+				Dur("frame_age_when_processed", time.Since(rawFrame.Timestamp)).
+				Bool("ai_enabled", cl.camera.AIEnabled).
+				Msg("AI processing took significant time")
+		}
 	}
 
 	// Fallback if processor failed or doesn't exist
@@ -472,7 +514,7 @@ func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
 	}
 }
 
-// runPublisher publishes frames
+// runPublisher publishes frames - gets latest processed frame when ready
 func (cl *CameraLifecycle) runPublisher() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -491,12 +533,38 @@ func (cl *CameraLifecycle) runPublisher() {
 			if !ok {
 				return
 			}
-			cl.publishFrame(processedFrame)
+
+			// SIMPLE: Just get the absolute latest processed frame RIGHT NOW
+			latestProcessedFrame := processedFrame
+			publisherDrainedCount := 0
+
+			// Drain everything to get the absolute latest processed frame
+		GetLatestProcessed:
+			for {
+				select {
+				case newerProcessedFrame := <-cl.camera.ProcessedFrames:
+					latestProcessedFrame = newerProcessedFrame
+					publisherDrainedCount++
+				default:
+					break GetLatestProcessed
+				}
+			}
+
+			if publisherDrainedCount > 0 {
+				log.Debug().
+					Str("camera_id", cl.camera.ID).
+					Int("skipped_old_processed", publisherDrainedCount).
+					Int64("latest_processed_id", latestProcessedFrame.FrameID).
+					Msg("Publishing latest processed frame")
+			}
+
+			// Publish the absolute latest processed frame
+			cl.publishFrame(latestProcessedFrame)
+
 		case <-time.After(1 * time.Second):
 			continue
 		}
 	}
-
 }
 
 // publishFrame publishes a single frame

@@ -242,38 +242,22 @@ func (s *Service) sendFrameToPipeline(camera *models.Camera, rawFrame *models.Ra
 	select {
 	case rawFramesChan <- rawFrame:
 	default:
-		// Buffer is full - conservative frame dropping to prevent temporal jumps
-		droppedRaw := 0
-		maxDrop := 5 // Conservative limit to prevent buffer overflow while maintaining continuity
-
-		// Conservatively drain only a few frames
-	DrainRawLoop:
-		for droppedRaw < maxDrop {
-			select {
-			case <-rawFramesChan:
-				droppedRaw++
-			default:
-				break DrainRawLoop
-			}
+		// Buffer is full - just drop one frame and send current
+		select {
+		case <-rawFramesChan:
+			// Dropped one frame
+		default:
 		}
 
-		// Now try to send the current frame
+		// Send current frame
 		select {
 		case rawFramesChan <- rawFrame:
-			if droppedRaw > 0 {
-				log.Debug().
-					Str("camera_id", camera.ID).
-					Int64("frame_id", frameID).
-					Int("dropped_raw_frames", droppedRaw).
-					Msg("Conservative raw frame dropping for temporal continuity")
-			}
 		default:
-			// Still full after conservative draining, skip this frame
-			log.Warn().
+			// Still full, skip this frame
+			log.Debug().
 				Str("camera_id", camera.ID).
 				Int64("frame_id", frameID).
-				Int("dropped_frames", droppedRaw).
-				Msg("Raw frame buffer still full after conservative draining - camera may be capturing too fast")
+				Msg("Skipped frame - buffer full")
 		}
 	}
 }
