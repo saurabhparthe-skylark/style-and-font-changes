@@ -452,8 +452,8 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	jpegBytes := buf.GetBytes()
 
 	// Call AI service safely with timeout
-	sanitizedID := sanitizeCameraID(rawFrame.CameraID)
-	req := &pb.FrameRequest{Image: jpegBytes, CameraId: sanitizedID, ProjectNames: projects}
+	// sanitizedID := sanitizeCameraID(rawFrame.CameraID)
+	req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: projects}
 
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
@@ -468,6 +468,28 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 			Msg("AI gRPC call failed (stream continues)")
 		return result
 	}
+
+	// for projectName, project := range resp.Results {
+	// 	if project == nil || project.Solutions == nil {
+	// 		continue
+	// 	}
+	// 	log.Info().Str("Project", projectName).Msg("Project Solutions:")
+	// 	for solutionName, solution := range project.Solutions {
+	// 		if solution == nil {
+	// 			continue
+	// 		}
+	// 		log.Info().
+	// 			Str("Solution", solutionName).
+	// 			Int("CurrentCount", int(solution.GetCurrentCount())).
+	// 			Int("TotalCount", int(solution.GetTotalCount())).
+	// 			Int("MaxCount", int(solution.GetMaxCount())).
+	// 			Int("OutRegionCount", int(solution.GetOutRegionCount())).
+	// 			Bool("ViolationDetected", solution.GetViolationDetected()).
+	// 			Bool("IntrusionDetected", solution.GetIntrusionDetected()).
+	// 			Bool("LoiteringDetected", solution.GetLoiteringDetected()).
+	// 			Msg("Solution details")
+	// 	}
+	// }
 
 	// AI succeeded!
 	result.FrameProcessed = true

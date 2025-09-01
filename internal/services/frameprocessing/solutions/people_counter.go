@@ -21,20 +21,20 @@ func DrawPeopleCounter(mat *gocv.Mat, solution models.SolutionResults, y *int) {
 	DrawTextEnhanced(mat, currentText, 15, *y, color.RGBA{R: 0, G: 255, B: 255, A: 255}, 0.8, 2)
 	*y += 35
 
-	// Total count
-	totalText := fmt.Sprintf("Total: %d", solution.TotalCount)
-	DrawText(mat, totalText, 15, *y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
-	*y += 35
-
 	// Max count
 	maxText := fmt.Sprintf("Peak: %d", solution.MaxCount)
 	DrawText(mat, maxText, 15, *y, color.RGBA{R: 255, G: 215, B: 0, A: 255})
 	*y += 35
 
+	// Total count
+	// totalText := fmt.Sprintf("Total: %d", solution.TotalCount)
+	// DrawText(mat, totalText, 15, *y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+	// *y += 35
+
 	// Out region count if applicable
-	outText := fmt.Sprintf("Exited: %d", solution.OutRegionCount)
-	DrawText(mat, outText, 15, *y, color.RGBA{R: 255, G: 165, B: 0, A: 255})
-	*y += 35
+	// outText := fmt.Sprintf("Exited: %d", solution.OutRegionCount)
+	// DrawText(mat, outText, 15, *y, color.RGBA{R: 255, G: 165, B: 0, A: 255})
+	// *y += 35
 }
 
 // DrawText helper function to draw text with background

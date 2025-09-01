@@ -13,7 +13,7 @@ func HandleIntrusionDetection(detection models.Detection, decision models.AlertD
 		return decision
 	}
 
-	decision.ShouldAlert = true
+	decision.ShouldAlert = false
 	decision.AlertType = models.AlertTypeIntrusionDetection
 	decision.Severity = models.AlertSeverityHigh
 	decision.Title = "Intrusion Detected"
