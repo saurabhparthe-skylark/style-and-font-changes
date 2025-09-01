@@ -11,52 +11,33 @@ import (
 
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
-	"kepler-worker-go/internal/services/frameprocessing"
 	"kepler-worker-go/internal/services/postprocessing"
 	"kepler-worker-go/internal/services/publisher"
 	"kepler-worker-go/internal/services/recorder"
 	"kepler-worker-go/internal/services/streamcapture"
 )
 
-// CameraManager manages the entire camera pipeline with production-grade lifecycle management
+// CameraManager manages multiple cameras with completely isolated resources per camera
 type CameraManager struct {
 	cfg *config.Config
 
+	// Per-camera lifecycles with completely isolated resources
 	cameras map[string]*CameraLifecycle
 	mutex   sync.RWMutex
 
-	// Pipeline components
-	frameProcessor   *frameprocessing.FrameProcessor
-	publisherSvc     *publisher.Service // Unified publisher service (MJPEG + WebRTC)
-	streamCaptureSvc *streamcapture.Service
-	// recorder         *recorder.Service
-
-	stopChannel chan struct{}
-
-	// internal: watchdog
+	// Manager-level resources (minimal shared state)
+	stopChannel  chan struct{}
 	watchdogOnce sync.Once
 
-	// Post-processing service
+	// Only stateless services can be shared
 	postProcessingService *postprocessing.Service
 }
 
-// NewCameraManager creates a new camera manager with full pipeline
+// NewCameraManager creates a new camera manager with complete per-camera resource isolation
 func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service, recorderSvc *recorder.Service, publisherSvc *publisher.Service) (*CameraManager, error) {
-	// Create pipeline components
-	frameProcessor, err := frameprocessing.NewFrameProcessor(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create frame processor: %w", err)
-	}
-
-	streamCaptureSvc := streamcapture.NewService(cfg)
-
 	cm := &CameraManager{
-		cfg:              cfg,
-		cameras:          make(map[string]*CameraLifecycle),
-		frameProcessor:   frameProcessor,
-		publisherSvc:     publisherSvc,
-		streamCaptureSvc: streamCaptureSvc,
-		// recorder:              recorderSvc,
+		cfg:                   cfg,
+		cameras:               make(map[string]*CameraLifecycle),
 		stopChannel:           make(chan struct{}),
 		postProcessingService: postProcessingSvc,
 	}
@@ -66,9 +47,9 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 		Int("max_fps_no_ai", cfg.MaxFPSNoAI).
 		Int("max_fps_with_ai", cfg.MaxFPSWithAI).
 		Bool("ai_enabled", cfg.AIEnabled).
-		Msg("Camera manager initialized with enterprise pipeline")
+		Msg("Camera manager initialized with complete per-camera resource isolation")
 
-	// Start watchdog to keep streams fresh and recover from staleness
+	// Start watchdog
 	cm.watchdogOnce.Do(func() {
 		go cm.runWatchdog()
 		log.Info().Dur("interval", cm.cfg.HealthCheckInterval).Msg("Watchdog started")
@@ -77,7 +58,7 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 	return cm, nil
 }
 
-// StartCamera starts a camera with production-grade lifecycle management
+// StartCamera starts a camera with completely isolated resources
 func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
@@ -87,10 +68,15 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		if lifecycle.getState() == StateRunning {
 			return fmt.Errorf("camera %s is already running", req.CameraID)
 		}
-		// Stop existing camera before restarting
+		// Stop existing camera completely before restarting
+		log.Info().
+			Str("camera_id", req.CameraID).
+			Msg("Stopping existing camera for clean restart")
 		if err := lifecycle.Stop(); err != nil {
 			log.Warn().Err(err).Str("camera_id", req.CameraID).Msg("Failed to stop existing camera")
 		}
+		// Wait for complete cleanup
+		time.Sleep(200 * time.Millisecond)
 		delete(cm.cameras, req.CameraID)
 	}
 
@@ -145,14 +131,14 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		FPSWindowSize:    30,
 		AIFrameCounter:   0,
 
-		// Generate MediaMTX URLs
-		RTSPUrl:   cm.publisherSvc.GetRTSPURL(req.CameraID),
-		WebRTCUrl: cm.publisherSvc.GetWebRTCURL(req.CameraID),
-		HLSUrl:    cm.publisherSvc.GetHLSURL(req.CameraID),
-		MJPEGUrl:  fmt.Sprintf("http://localhost:%d/mjpeg/%s", cm.cfg.Port, req.CameraID),
+		// Generate MediaMTX URLs (these will be handled by per-camera publisher)
+		RTSPUrl:   fmt.Sprintf("rtsp://192.168.1.7:8554/%s", req.CameraID),
+		WebRTCUrl: fmt.Sprintf("ws://192.168.1.7:8889/%s/whep", req.CameraID),
+		HLSUrl:    fmt.Sprintf("http://192.168.1.7:8888/%s/index.m3u8", req.CameraID),
+		MJPEGUrl:  fmt.Sprintf("http://192.168.1.7:%d/mjpeg/%s", cm.cfg.Port, req.CameraID),
 	}
 
-	// Create lifecycle manager
+	// Create lifecycle manager with completely isolated resources
 	lifecycle := NewCameraLifecycle(camera, cm)
 	cm.cameras[req.CameraID] = lifecycle
 
@@ -173,7 +159,7 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		Str("webrtc_url", camera.WebRTCUrl).
 		Str("hls_url", camera.HLSUrl).
 		Str("mjpeg_url", camera.MJPEGUrl).
-		Msg("Camera started with production-grade lifecycle management")
+		Msg("Camera started with completely isolated resources")
 
 	return nil
 }
@@ -313,7 +299,7 @@ func (cm *CameraManager) GetCameras() []*models.CameraResponse {
 	return cameras
 }
 
-// ServeHTTP serves MJPEG stream for a camera
+// ServeHTTP serves MJPEG stream for a camera using isolated publisher
 func (cm *CameraManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract camera ID from URL path
 	// URL format: /mjpeg/:camera_id
@@ -344,13 +330,14 @@ func (cm *CameraManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delegate to publisher service for actual MJPEG streaming
-	if cm.publisherSvc == nil {
-		http.Error(w, "Publisher service not available", http.StatusServiceUnavailable)
+	// Get the camera's dedicated publisher service
+	publisherSvc := lifecycle.getPublisherService()
+	if publisherSvc == nil {
+		http.Error(w, "Publisher service not available for this camera", http.StatusServiceUnavailable)
 		return
 	}
 
-	cm.publisherSvc.StreamMJPEGHTTP(w, r, cameraID)
+	publisherSvc.StreamMJPEGHTTP(w, r, cameraID)
 }
 
 // runWatchdog monitors camera health and handles cleanup
@@ -430,7 +417,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 			Str("camera_id", cameraID).
 			Bool("old_ai_enabled", oldAIEnabled).
 			Bool("new_ai_enabled", camera.AIEnabled).
-			Msg("AI enabled state changed, will restart camera")
+			Msg("AI enabled state changed, will restart camera with isolated resources")
 	}
 
 	if req.AIEndpoint != nil && *req.AIEndpoint != camera.AIEndpoint {
@@ -481,7 +468,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	if needsRestart && lifecycle.getState() == StateRunning {
 		log.Info().
 			Str("camera_id", cameraID).
-			Msg("Restarting camera due to configuration changes")
+			Msg("Restarting camera due to configuration changes with isolated resources")
 
 		return lifecycle.Restart()
 	}
@@ -497,7 +484,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	return nil
 }
 
-// RestartCamera performs a zero-downtime restart of the camera
+// RestartCamera performs a restart of the camera
 func (cm *CameraManager) RestartCamera(cameraID string) error {
 	cm.mutex.RLock()
 	lifecycle, exists := cm.cameras[cameraID]
@@ -507,7 +494,7 @@ func (cm *CameraManager) RestartCamera(cameraID string) error {
 		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	log.Info().Str("camera_id", cameraID).Msg("Performing zero-downtime restart")
+	log.Info().Str("camera_id", cameraID).Msg("Performing camera restart with isolated resources")
 
 	return lifecycle.Restart()
 }
@@ -528,7 +515,6 @@ func (cm *CameraManager) ForceRestartCamera(cameraID string) error {
 }
 
 // Safe channel closing helper functions to prevent "close of closed channel" panics
-
 func (cm *CameraManager) safeCloseStopChannel(ch chan struct{}, cameraID string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -559,10 +545,11 @@ func (cm *CameraManager) ResyncRealtime(cameraID string) error {
 	return lifecycle.Restart()
 }
 
-// ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail using streamcapture service
+// ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail
 func (cm *CameraManager) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCheckResponse {
-	log.Info().Str("rtsp_url", rtspURL).Msg("Delegating RTSP validation to streamcapture service")
+	log.Info().Str("rtsp_url", rtspURL).Msg("Validating RTSP stream with isolated services")
 
-	// Use the streamcapture service which has comprehensive FFmpeg configuration
-	return cm.streamCaptureSvc.ValidateRTSPAndCaptureThumbnail(rtspURL)
+	// We need to create a temporary streamcapture service for validation
+	tempStreamCapture := streamcapture.NewService(cm.cfg)
+	return tempStreamCapture.ValidateRTSPAndCaptureThumbnail(rtspURL)
 }

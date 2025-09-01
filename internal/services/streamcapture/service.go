@@ -1,6 +1,7 @@
 package streamcapture
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"image"
@@ -29,7 +30,7 @@ func NewService(cfg *config.Config) *Service {
 }
 
 // StartVideoCaptureProcess starts OpenCV VideoCapture for a camera
-func (s *Service) StartVideoCaptureProcess(camera *models.Camera) error {
+func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.Camera) error {
 	log.Info().
 		Str("camera_id", camera.ID).
 		Str("url", camera.URL).
@@ -82,93 +83,136 @@ func (s *Service) StartVideoCaptureProcess(camera *models.Camera) error {
 	maxConsecutiveErrors := 10
 
 	for {
+		// Check context cancellation more aggressively at the start of each loop iteration
 		select {
+		case <-ctx.Done():
+			log.Info().Str("camera_id", camera.ID).Msg("Stopping VideoCapture reader due to context cancel")
+			return nil
 		case <-camera.StopChannel:
 			log.Info().Str("camera_id", camera.ID).Msg("Stopping VideoCapture reader due to stop signal")
 			return nil
 		default:
-			ok := cap.Read(&img)
+		}
 
-			if !ok {
-				consecutiveErrors++
+		// Also check context before reading frame
+		select {
+		case <-ctx.Done():
+			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before frame read")
+			return nil
+		default:
+		}
+
+		ok := cap.Read(&img)
+
+		if !ok {
+			consecutiveErrors++
+			log.Warn().
+				Str("camera_id", camera.ID).
+				Int("consecutive_errors", consecutiveErrors).
+				Msg("Failed to read frame from VideoCapture")
+
+			// Enhanced error recovery similar to Python implementation
+			if consecutiveErrors >= maxConsecutiveErrors {
 				log.Warn().
 					Str("camera_id", camera.ID).
 					Int("consecutive_errors", consecutiveErrors).
-					Msg("Failed to read frame from VideoCapture")
+					Msg("Too many consecutive errors, attempting decoder reset")
 
-				// Enhanced error recovery similar to Python implementation
-				if consecutiveErrors >= maxConsecutiveErrors {
-					log.Warn().
+				// Attempt to reset the capture (similar to Python's _reset_decoder)
+				if s.resetVideoCapture(&cap, camera) {
+					consecutiveErrors = 0
+					log.Info().
 						Str("camera_id", camera.ID).
-						Int("consecutive_errors", consecutiveErrors).
-						Msg("Too many consecutive errors, attempting decoder reset")
-
-					// Attempt to reset the capture (similar to Python's _reset_decoder)
-					if s.resetVideoCapture(&cap, camera) {
-						consecutiveErrors = 0
-						log.Info().
-							Str("camera_id", camera.ID).
-							Msg("Successfully reset VideoCapture after errors")
-						continue
-					} else {
-						return fmt.Errorf("failed to reset VideoCapture after %d consecutive errors", consecutiveErrors)
-					}
+						Msg("Successfully reset VideoCapture after errors")
+					continue
+				} else {
+					return fmt.Errorf("failed to reset VideoCapture after %d consecutive errors", consecutiveErrors)
 				}
-
-				// Progressive delay based on error count (similar to Python's backoff)
-				delay := time.Duration(consecutiveErrors*50) * time.Millisecond
-				if delay > 2*time.Second {
-					delay = 2 * time.Second
-				}
-				time.Sleep(delay)
-				continue
 			}
 
-			if img.Empty() {
-				consecutiveErrors++
-				log.Warn().
-					Str("camera_id", camera.ID).
-					Int("consecutive_errors", consecutiveErrors).
-					Msg("Received empty frame from VideoCapture")
-
-				if consecutiveErrors >= maxConsecutiveErrors {
-					return fmt.Errorf("too many consecutive empty frames (%d)", consecutiveErrors)
-				}
-				continue
+			// Progressive delay based on error count (similar to Python's backoff)
+			delay := time.Duration(consecutiveErrors*50) * time.Millisecond
+			if delay > 2*time.Second {
+				delay = 2 * time.Second
 			}
 
-			// Successfully read a frame
-			consecutiveErrors = 0
-			frameID++
-			camera.FrameCount++
-			camera.LastFrameTime = time.Now()
-
-			processedImg := gocv.NewMat()
-			if img.Cols() != s.cfg.OutputWidth || img.Rows() != s.cfg.OutputHeight {
-				gocv.Resize(img, &processedImg, image.Pt(s.cfg.OutputWidth, s.cfg.OutputHeight), 0, 0, gocv.InterpolationLinear)
-			} else {
-				processedImg = img.Clone()
+			// Sleep with context cancellation check
+			select {
+			case <-ctx.Done():
+				log.Info().Str("camera_id", camera.ID).Msg("Context cancelled during error backoff")
+				return nil
+			case <-time.After(delay):
 			}
+			continue
+		}
 
-			// Convert to bytes (BGR)
-			frameData := processedImg.ToBytes()
-			processedImg.Close()
+		if img.Empty() {
+			consecutiveErrors++
+			log.Warn().
+				Str("camera_id", camera.ID).
+				Int("consecutive_errors", consecutiveErrors).
+				Msg("Received empty frame from VideoCapture")
 
-			rawFrame := &models.RawFrame{
-				CameraID:  camera.ID,
-				Data:      frameData,
-				Timestamp: time.Now(),
-				FrameID:   frameID,
-				Width:     s.cfg.OutputWidth,
-				Height:    s.cfg.OutputHeight,
-				Format:    "BGR24",
+			if consecutiveErrors >= maxConsecutiveErrors {
+				return fmt.Errorf("too many consecutive empty frames (%d)", consecutiveErrors)
 			}
+			continue
+		}
 
-			// Send to processing pipeline
-			s.sendFrameToPipeline(camera, rawFrame, frameID)
+		// Successfully read a frame
+		consecutiveErrors = 0
+		frameID++
+		camera.FrameCount++
+		camera.LastFrameTime = time.Now()
 
-			targetInterval := time.Second / time.Duration(s.getTargetFPS())
-			time.Sleep(targetInterval)
+		processedImg := gocv.NewMat()
+		if img.Cols() != s.cfg.OutputWidth || img.Rows() != s.cfg.OutputHeight {
+			gocv.Resize(img, &processedImg, image.Pt(s.cfg.OutputWidth, s.cfg.OutputHeight), 0, 0, gocv.InterpolationLinear)
+		} else {
+			processedImg = img.Clone()
+		}
+
+		// Convert to bytes (BGR)
+		frameData := processedImg.ToBytes()
+		processedImg.Close()
+
+		rawFrame := &models.RawFrame{
+			CameraID:  camera.ID,
+			Data:      frameData,
+			Timestamp: time.Now(),
+			FrameID:   frameID,
+			Width:     s.cfg.OutputWidth,
+			Height:    s.cfg.OutputHeight,
+			Format:    "BGR24",
+		}
+
+		// Check context before sending to pipeline
+		select {
+		case <-ctx.Done():
+			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before sending to pipeline")
+			return nil
+		default:
+		}
+
+		// Send to processing pipeline
+		s.sendFrameToPipeline(camera, rawFrame, frameID)
+
+		// Check context before FPS sleep
+		select {
+		case <-ctx.Done():
+			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before FPS sleep")
+			return nil
+		default:
+		}
+
+		targetInterval := time.Second / time.Duration(s.getTargetFPS())
+
+		// Sleep with context cancellation check
+		select {
+		case <-ctx.Done():
+			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled during FPS sleep")
+			return nil
+		case <-time.After(targetInterval):
 		}
 	}
 }
@@ -202,17 +246,16 @@ func (s *Service) sendFrameToPipeline(camera *models.Camera, rawFrame *models.Ra
 			Int64("frame_id", frameID).
 			Msg("Frame sent to processing pipeline")
 	default:
-		// Buffer is full - implement frame dropping for real-time streaming
+		// Buffer is full - conservative frame dropping to prevent temporal jumps
 		droppedRaw := 0
-		// Drain some frames to make space for the latest
+		maxDrop := 5 // Conservative limit to prevent buffer overflow while maintaining continuity
+
+		// Conservatively drain only a few frames
 	DrainRawLoop:
-		for {
+		for droppedRaw < maxDrop {
 			select {
 			case <-rawFramesChan:
 				droppedRaw++
-				if droppedRaw >= s.cfg.FrameBufferSize/2 {
-					break DrainRawLoop
-				}
 			default:
 				break DrainRawLoop
 			}
@@ -226,14 +269,15 @@ func (s *Service) sendFrameToPipeline(camera *models.Camera, rawFrame *models.Ra
 					Str("camera_id", camera.ID).
 					Int64("frame_id", frameID).
 					Int("dropped_raw_frames", droppedRaw).
-					Msg("Dropped older raw frames for real-time capture")
+					Msg("Conservative raw frame dropping for temporal continuity")
 			}
 		default:
-			// Still full, just skip this frame
-			log.Debug().
+			// Still full after conservative draining, skip this frame
+			log.Warn().
 				Str("camera_id", camera.ID).
 				Int64("frame_id", frameID).
-				Msg("Skipped raw frame - buffer still full after draining")
+				Int("dropped_frames", droppedRaw).
+				Msg("Raw frame buffer still full after conservative draining - camera may be capturing too fast")
 		}
 	}
 }

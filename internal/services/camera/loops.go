@@ -1,136 +1,115 @@
 package camera
 
 import (
-	"context"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"kepler-worker-go/internal/models"
-	"kepler-worker-go/internal/services/frameprocessing"
 )
 
-// streamReaderLoop runs the stream reader with proper context handling
-func (cl *CameraLifecycle) streamReaderLoop(ctx context.Context) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Error().
-				Interface("panic", r).
-				Str("camera_id", cl.camera.ID).
-				Msg("Stream reader panic recovered")
-		}
-	}()
+// startFrameProcessors starts background frame processors with completely isolated resources
+func (cl *CameraLifecycle) startFrameProcessors() {
+	log.Debug().Str("camera_id", cl.camera.ID).Msg("Starting completely isolated frame processors")
 
-	var attempt int
+	// Start frame processor in background
+	go cl.runFrameProcessor()
 
-	for {
-		select {
-		case <-ctx.Done():
-			log.Debug().Str("camera_id", cl.camera.ID).Msg("Stream reader stopping")
-			return
-		default:
-			err := cl.cm.streamCaptureSvc.StartVideoCaptureProcess(cl.camera)
-			if err != nil {
-				log.Error().
-					Err(err).
-					Str("camera_id", cl.camera.ID).
-					Msg("VideoCapture process failed")
+	// Start publisher in background
+	go cl.runPublisher()
 
-				cl.camera.ErrorCount++
-				attempt++
-
-				// Calculate backoff delay
-				delay := cl.cm.streamCaptureSvc.CalculateBackoffDelay(attempt)
-				log.Info().
-					Str("camera_id", cl.camera.ID).
-					Dur("retry_in", delay).
-					Int("attempt", attempt).
-					Msg("Reconnecting to camera")
-
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(delay):
-					continue
-				}
-			} else {
-				// Success path resets attempts
-				attempt = 0
-			}
-		}
-	}
+	// Start alert processor in background
+	go cl.runAlertProcessor()
 }
 
-// frameProcessorLoop runs the frame processor with proper context handling
-func (cl *CameraLifecycle) frameProcessorLoop(ctx context.Context) {
+// runFrameProcessor processes frames with dedicated processor and error recovery
+func (cl *CameraLifecycle) runFrameProcessor() {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
-				Interface("panic", r).
 				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
 				Msg("Frame processor panic recovered")
 		}
 	}()
 
-	// Create per-camera frame processor
-	frameProcessor, err := frameprocessing.NewFrameProcessorWithCamera(cl.cm.cfg, cl.camera)
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("camera_id", cl.camera.ID).
-			Msg("Failed to create frame processor for camera")
-		return
-	}
-	defer frameProcessor.Shutdown()
+	log.Debug().Str("camera_id", cl.camera.ID).Msg("Dedicated frame processor started")
 
-	for {
+	for cl.isRunning() {
 		select {
-		case <-ctx.Done():
+		case <-cl.ctx.Done():
 			log.Debug().Str("camera_id", cl.camera.ID).Msg("Frame processor stopping")
 			return
-		case rawFrame := <-cl.camera.RawFrames:
-			cl.processFrame(rawFrame, frameProcessor)
+		case rawFrame, ok := <-cl.camera.RawFrames:
+			if !ok {
+				log.Debug().Str("camera_id", cl.camera.ID).Msg("Raw frames channel closed")
+				return
+			}
+			cl.processFrame(rawFrame)
+		case <-time.After(1 * time.Second):
+			// Timeout to check if we should stop
+			continue
 		}
 	}
+
+	log.Debug().Str("camera_id", cl.camera.ID).Msg("Dedicated frame processor stopped")
 }
 
-// processFrame processes a single frame
-func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame, frameProcessor *frameprocessing.FrameProcessor) {
-	// FRAME SKIPPING: Always get the latest frame by draining the buffer
-	var latestFrame *models.RawFrame = rawFrame
-	skippedFrames := 0
-
-	// Drain all pending frames to get the absolute latest
-DrainLoop:
-	for {
-		select {
-		case newerFrame := <-cl.camera.RawFrames:
-			latestFrame = newerFrame
-			skippedFrames++
-		default:
-			break DrainLoop
+// processFrame processes a single frame safely with completely isolated resources
+func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Process frame panic recovered")
 		}
-	}
+	}()
 
-	if skippedFrames > 0 {
-		log.Debug().
-			Str("camera_id", cl.camera.ID).
-			Int("skipped_frames", skippedFrames).
-			Int64("latest_frame_id", latestFrame.FrameID).
-			Msg("Skipped frames for real-time processing")
+	if rawFrame == nil {
+		return
 	}
 
 	startTime := time.Now()
 
-	// Update camera statistics first
-	cl.camera.FPS = cl.cm.streamCaptureSvc.CalculateFPS(cl.camera)
-	cl.camera.Latency = time.Since(latestFrame.Timestamp)
+	// Update camera statistics using isolated stream capture service
+	streamCaptureSvc := cl.getStreamCaptureService()
+	if streamCaptureSvc != nil {
+		cl.camera.FPS = streamCaptureSvc.CalculateFPS(cl.camera)
+	}
+	cl.camera.Latency = time.Since(rawFrame.Timestamp)
 
-	// Process the latest frame with current stats and per-camera AI settings
-	processedFrame := frameProcessor.ProcessFrame(latestFrame, cl.camera.Projects, cl.camera.FPS, cl.camera.Latency)
+	// Get dedicated frame processor for this camera (completely isolated!)
+	frameProcessor := cl.getFrameProcessor()
 
-	// Update camera AI statistics
-	if processedFrame.AIDetections != nil {
+	// Process the frame - with AI bypass if needed
+	var processedFrame *models.ProcessedFrame
+	if frameProcessor != nil {
+		// Use dedicated processor (no conflicts with other cameras!)
+		processedFrame = frameProcessor.ProcessFrame(rawFrame, cl.camera.Projects, cl.camera.FPS, cl.camera.Latency)
+	} else {
+		// Fallback: create basic processed frame without AI
+		log.Debug().
+			Str("camera_id", cl.camera.ID).
+			Msg("No frame processor available, creating basic frame")
+
+		processedFrame = &models.ProcessedFrame{
+			CameraID:     rawFrame.CameraID,
+			Data:         rawFrame.Data,
+			RawData:      rawFrame.Data,
+			Timestamp:    rawFrame.Timestamp,
+			FrameID:      rawFrame.FrameID,
+			Width:        rawFrame.Width,
+			Height:       rawFrame.Height,
+			FPS:          cl.camera.FPS,
+			Latency:      cl.camera.Latency,
+			AIEnabled:    cl.camera.AIEnabled,
+			AIDetections: nil,
+		}
+	}
+
+	// Update AI statistics safely
+	if processedFrame != nil && processedFrame.AIDetections != nil {
 		if aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult); ok {
 			cl.camera.AIProcessingTime = aiResult.ProcessingTime
 			cl.camera.AIDetectionCount += int64(len(aiResult.Detections))
@@ -138,8 +117,12 @@ DrainLoop:
 			if aiResult.ErrorMessage != "" {
 				cl.camera.LastAIError = aiResult.ErrorMessage
 				cl.camera.ErrorCount++
+				log.Warn().
+					Str("camera_id", cl.camera.ID).
+					Str("ai_error", aiResult.ErrorMessage).
+					Msg("AI processing error")
 			} else if aiResult.FrameProcessed {
-				cl.camera.LastAIError = "" // Clear error on successful processing
+				cl.camera.LastAIError = ""
 			}
 		}
 	}
@@ -149,128 +132,167 @@ DrainLoop:
 		Str("camera_id", cl.camera.ID).
 		Dur("processing_time", processingTime).
 		Bool("ai_enabled", cl.camera.AIEnabled).
-		Int("skipped_frames", skippedFrames).
-		Msg("Frame processed with real-time optimization")
+		Bool("has_dedicated_processor", frameProcessor != nil).
+		Msg("Frame processed with completely isolated resources")
 
-	// Send to publisher (non-blocking)
-	select {
-	case cl.camera.ProcessedFrames <- processedFrame:
-	default:
-		// Drop frame if buffer is full for real-time streaming
-	}
+	// Send to other processors (non-blocking)
+	if processedFrame != nil {
+		select {
+		case cl.camera.ProcessedFrames <- processedFrame:
+		default:
+			log.Debug().
+				Str("camera_id", cl.camera.ID).
+				Msg("Processed frames buffer full, dropping frame")
+		}
 
-	// Send to alerts (non-blocking)
-	select {
-	case cl.camera.AlertFrames <- processedFrame:
-	default:
-		// Drop frame if buffer is full
-	}
+		select {
+		case cl.camera.AlertFrames <- processedFrame:
+		default:
+			log.Debug().
+				Str("camera_id", cl.camera.ID).
+				Msg("Alert frames buffer full, dropping frame")
+		}
 
-	// Send to recorder (non-blocking)
-	select {
-	case cl.camera.RecorderFrames <- processedFrame:
-	default:
-		// Drop frame if buffer is full
+		select {
+		case cl.camera.RecorderFrames <- processedFrame:
+		default:
+			log.Debug().
+				Str("camera_id", cl.camera.ID).
+				Msg("Recorder frames buffer full, dropping frame")
+		}
 	}
 }
 
-// publisherLoop runs the publisher with proper context handling
-func (cl *CameraLifecycle) publisherLoop(ctx context.Context) {
+// runPublisher publishes frames with isolated publisher service
+func (cl *CameraLifecycle) runPublisher() {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
-				Interface("panic", r).
 				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
 				Msg("Publisher panic recovered")
 		}
 	}()
 
-	for {
+	log.Debug().Str("camera_id", cl.camera.ID).Msg("Isolated publisher started")
+
+	for cl.isRunning() {
 		select {
-		case <-ctx.Done():
+		case <-cl.ctx.Done():
 			log.Debug().Str("camera_id", cl.camera.ID).Msg("Publisher stopping")
 			return
-		case processedFrame := <-cl.camera.ProcessedFrames:
+		case processedFrame, ok := <-cl.camera.ProcessedFrames:
+			if !ok {
+				log.Debug().Str("camera_id", cl.camera.ID).Msg("Processed frames channel closed")
+				return
+			}
 			cl.publishFrame(processedFrame)
+		case <-time.After(1 * time.Second):
+			// Timeout to check if we should stop
+			continue
 		}
 	}
+
+	log.Debug().Str("camera_id", cl.camera.ID).Msg("Isolated publisher stopped")
 }
 
-// publishFrame publishes a single frame
+// publishFrame publishes a single frame safely using isolated publisher service
 func (cl *CameraLifecycle) publishFrame(processedFrame *models.ProcessedFrame) {
-	// FRAME SKIPPING: drain to latest to keep real-time publishing
-	latestFrame := processedFrame
-	skipped := 0
-DrainPub:
-	for {
-		select {
-		case newer := <-cl.camera.ProcessedFrames:
-			latestFrame = newer
-			skipped++
-		default:
-			break DrainPub
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Publish frame panic recovered")
 		}
+	}()
+
+	if processedFrame == nil {
+		return
 	}
 
-	if skipped > 0 {
-		log.Debug().
+	// Use dedicated publisher service (completely isolated!)
+	publisherSvc := cl.getPublisherService()
+	if publisherSvc == nil {
+		log.Error().
 			Str("camera_id", cl.camera.ID).
-			Int("skipped_frames", skipped).
-			Int64("latest_frame_id", latestFrame.FrameID).
-			Msg("Publisher skipped frames to maintain real-time stream")
+			Msg("No publisher service available")
+		return
 	}
 
-	// Publish only the freshest frame to both MJPEG and WebRTC
-	err := cl.cm.publisherSvc.PublishFrame(latestFrame)
+	err := publisherSvc.PublishFrame(processedFrame)
 	if err != nil {
 		log.Error().
 			Err(err).
 			Str("camera_id", cl.camera.ID).
 			Msg("Failed to publish frame")
 		cl.camera.ErrorCount++
+	} else {
+		log.Debug().
+			Str("camera_id", cl.camera.ID).
+			Int64("frame_id", processedFrame.FrameID).
+			Msg("Frame published successfully with isolated service")
 	}
 }
 
-// postProcessorLoop runs the post processor with proper context handling
-func (cl *CameraLifecycle) postProcessorLoop(ctx context.Context) {
+// runAlertProcessor processes alert frames
+func (cl *CameraLifecycle) runAlertProcessor() {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
-				Interface("panic", r).
 				Str("camera_id", cl.camera.ID).
-				Msg("Post processor panic recovered")
+				Interface("panic", r).
+				Msg("Alert processor panic recovered")
 		}
 	}()
 
-	for {
+	log.Debug().Str("camera_id", cl.camera.ID).Msg("Alert processor started")
+
+	for cl.isRunning() {
 		select {
-		case <-ctx.Done():
-			log.Debug().Str("camera_id", cl.camera.ID).Msg("Post processor stopping")
+		case <-cl.ctx.Done():
+			log.Debug().Str("camera_id", cl.camera.ID).Msg("Alert processor stopping")
 			return
-		case processedFrame := <-cl.camera.AlertFrames:
+		case processedFrame, ok := <-cl.camera.AlertFrames:
+			if !ok {
+				log.Debug().Str("camera_id", cl.camera.ID).Msg("Alert frames channel closed")
+				return
+			}
 			cl.processAlert(processedFrame)
+		case <-time.After(1 * time.Second):
+			// Timeout to check if we should stop
+			continue
 		}
 	}
+
+	log.Debug().Str("camera_id", cl.camera.ID).Msg("Alert processor stopped")
 }
 
-// processAlert processes a single alert frame
+// processAlert processes a single alert frame safely
 func (cl *CameraLifecycle) processAlert(processedFrame *models.ProcessedFrame) {
-	// Only process alerts if AI is enabled for this camera
-	if !cl.camera.AIEnabled {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Process alert panic recovered")
+		}
+	}()
+
+	// Only process alerts if AI is enabled
+	if !cl.camera.AIEnabled || processedFrame == nil {
 		return
 	}
 
-	// Use post-processing service with detection-only processing
+	// Use post-processing service from camera manager (this can be shared as it's stateless)
 	if cl.cm.postProcessingService != nil {
 		aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult)
 		if !ok || len(aiResult.Detections) == 0 {
 			return
 		}
 
-		// No conversion needed! Frame processor already outputs models.Detection
 		detections := aiResult.Detections
 
-		// Create frame metadata
 		frameMetadata := models.FrameMetadata{
 			FrameID:     processedFrame.FrameID,
 			Timestamp:   processedFrame.Timestamp,
@@ -280,16 +302,14 @@ func (cl *CameraLifecycle) processAlert(processedFrame *models.ProcessedFrame) {
 			CameraID:    cl.camera.ID,
 		}
 
-		// Use detection-only processing with both raw and annotated frame data
 		result := cl.cm.postProcessingService.ProcessDetections(
 			cl.camera.ID,
 			detections,
 			frameMetadata,
-			processedFrame.RawData, // Raw frame data for clean crops
-			processedFrame.Data,    // Annotated frame data for context images
+			processedFrame.RawData,
+			processedFrame.Data,
 		)
 
-		// Log processing results
 		if len(result.Errors) > 0 {
 			log.Warn().
 				Str("camera_id", cl.camera.ID).
@@ -301,9 +321,7 @@ func (cl *CameraLifecycle) processAlert(processedFrame *models.ProcessedFrame) {
 			log.Debug().
 				Str("camera_id", cl.camera.ID).
 				Int("alerts_created", result.AlertsCreated).
-				Int("valid_detections", result.ValidDetections).
-				Int("suppressed_detections", result.SuppressedDetections).
-				Msg("Alert processing completed")
+				Msg("Alerts processed successfully")
 		}
 	}
 }
