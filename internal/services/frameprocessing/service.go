@@ -328,8 +328,19 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 }
 
 func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []string, currentFPS float64, currentLatency time.Duration) *models.ProcessedFrame {
-	// Align connection state with current camera settings on each frame in a lightweight way
+	// STREAM-FIRST: Always create a valid processed frame, AI can fail but stream continues
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", rawFrame.CameraID).
+				Interface("panic", r).
+				Msg("Frame processor panic recovered - stream continues")
+		}
+	}()
+
+	// Align connection state with current camera settings dynamically
 	fp.refreshAIConnection()
+
 	aiEnabled := fp.cfg.AIEnabled
 	aiTimeout := fp.cfg.AITimeout
 	aiFrameInterval := fp.cfg.AIFrameInterval
@@ -345,6 +356,7 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 	annotatedCopy := make([]byte, len(rawFrame.Data))
 	copy(annotatedCopy, rawFrame.Data)
 
+	// ALWAYS create a valid processed frame (stream guaranteed!)
 	processedFrame := &models.ProcessedFrame{
 		CameraID:  rawFrame.CameraID,
 		Data:      annotatedCopy,
@@ -360,84 +372,113 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 		Bitrate:   fp.cfg.OutputBitrate,
 	}
 
-	aiResult := &models.AIProcessingResult{Detections: []models.Detection{}, Solutions: make(map[string]models.SolutionResults), ProjectResults: make(map[string]int), FrameProcessed: false}
+	// Default AI result (empty but valid)
+	aiResult := &models.AIProcessingResult{
+		Detections:     []models.Detection{},
+		Solutions:      make(map[string]models.SolutionResults),
+		ProjectResults: make(map[string]int),
+		FrameProcessed: false,
+	}
 
+	// Try AI processing if conditions are met
 	shouldProcessAI := aiEnabled && len(projects) > 0 && fp.grpcClient != nil
-	log.Debug().Str("camera_id", rawFrame.CameraID).Bool("ai_enabled", aiEnabled).Int("projects_count", len(projects)).Bool("grpc_client_available", fp.grpcClient != nil).Bool("initial_should_process", shouldProcessAI).Msg("AI processing decision check")
-
 	if shouldProcessAI {
 		if fp.camera != nil {
 			shouldProcessAI = (fp.camera.AIFrameCounter % int64(aiFrameInterval)) == 0
-			log.Debug().Str("camera_id", rawFrame.CameraID).Int64("ai_frame_counter", fp.camera.AIFrameCounter).Int("ai_frame_interval", aiFrameInterval).Bool("will_process_ai", shouldProcessAI).Msg("ai_frame_interval_check")
 		} else {
 			shouldProcessAI = (rawFrame.FrameID % int64(aiFrameInterval)) == 0
-			log.Debug().Str("camera_id", rawFrame.CameraID).Int64("frame_id", rawFrame.FrameID).Int("ai_frame_interval", aiFrameInterval).Bool("will_process_ai", shouldProcessAI).Msg("ai_frame_interval_check")
 		}
-	} else {
-		log.Debug().Str("camera_id", rawFrame.CameraID).Bool("ai_enabled", aiEnabled).Int("projects_count", len(projects)).Bool("grpc_client_available", fp.grpcClient != nil).Msg("AI processing skipped - conditions not met")
 	}
 
 	if shouldProcessAI {
 		startTime := time.Now()
 		aiResult = fp.processFrameWithAI(rawFrame, projects, aiTimeout)
 		aiResult.ProcessingTime = time.Since(startTime)
-		log.Debug().Str("camera_id", rawFrame.CameraID).Int("detection_count", len(aiResult.Detections)).Dur("processing_time", aiResult.ProcessingTime).Bool("frame_processed", aiResult.FrameProcessed).Int64("ai_frame_counter", func() int64 {
-			if fp.camera != nil {
-				return fp.camera.AIFrameCounter
-			}
-			return rawFrame.FrameID
-		}()).Msg("ai_processing_completed")
 	}
 
+	log.Debug().
+		Str("camera_id", rawFrame.CameraID).
+		Int("detection_count", len(aiResult.Detections)).
+		Dur("processing_time", aiResult.ProcessingTime).
+		Bool("frame_processed", aiResult.FrameProcessed).
+		Str("error_message", aiResult.ErrorMessage).
+		Msg("AI processing completed")
+
 	processedFrame.AIDetections = aiResult
+
 	fp.addOverlay(processedFrame, aiResult, projects)
+
 	return processedFrame
 }
 
 func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects []string, aiTimeout time.Duration) *models.AIProcessingResult {
-	result := &models.AIProcessingResult{Detections: []models.Detection{}, Solutions: make(map[string]models.SolutionResults), ProjectResults: make(map[string]int), FrameProcessed: false}
+	// ROBUST AI: Always return a valid result, never crash the stream
+	result := &models.AIProcessingResult{
+		Detections:     []models.Detection{},
+		Solutions:      make(map[string]models.SolutionResults),
+		ProjectResults: make(map[string]int),
+		FrameProcessed: false,
+	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			result.ErrorMessage = fmt.Sprintf("AI processing panic: %v", r)
+			result.FrameProcessed = false
+			log.Error().
+				Str("camera_id", rawFrame.CameraID).
+				Interface("panic", r).
+				Msg("AI processing panic recovered - returning safe result")
+		}
+	}()
+
+	// Convert frame to Mat safely
 	mat, err := gocv.NewMatFromBytes(rawFrame.Height, rawFrame.Width, gocv.MatTypeCV8UC3, rawFrame.Data)
 	if err != nil {
-		result.ErrorMessage = fmt.Sprintf("Failed to create Mat from frame data: %v", err)
-		log.Error().Err(err).Str("camera_id", rawFrame.CameraID).Msg("ai_mat_from_bytes_failed")
+		result.ErrorMessage = fmt.Sprintf("Failed to create Mat: %v", err)
+		log.Warn().Err(err).Str("camera_id", rawFrame.CameraID).Msg("AI Mat creation failed (stream continues)")
 		return result
 	}
 	defer mat.Close()
 
+	// Encode to JPEG safely
 	buf, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, mat, []int{gocv.IMWriteJpegQuality, 95})
 	if err != nil {
-		result.ErrorMessage = fmt.Sprintf("Failed to encode frame as JPEG: %v", err)
-		log.Error().Err(err).Str("camera_id", rawFrame.CameraID).Msg("ai_jpeg_encoding_failed")
+		result.ErrorMessage = fmt.Sprintf("Failed to encode JPEG: %v", err)
+		log.Warn().Err(err).Str("camera_id", rawFrame.CameraID).Msg("AI JPEG encoding failed (stream continues)")
 		return result
 	}
 	defer buf.Close()
 
 	jpegBytes := buf.GetBytes()
 
-	// Sanitize camera ID for AI service compatibility
+	// Call AI service safely with timeout
 	sanitizedID := sanitizeCameraID(rawFrame.CameraID)
 	req := &pb.FrameRequest{Image: jpegBytes, CameraId: sanitizedID, ProjectNames: projects}
+
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
 	resp, err := fp.grpcClient.InferDetection(ctx, req)
-
-	log.Debug().Str("camera_id", rawFrame.CameraID).Str("json_data", func() string {
-		if resp != nil {
-			return resp.String()
-		}
-		return ""
-	}()).Msg("AI response")
-
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("AI service call failed: %v", err)
-		log.Error().Err(err).Str("camera_id", rawFrame.CameraID).Dur("timeout", aiTimeout).Msg("ai_grpc_call_failed")
+		log.Warn().
+			Err(err).
+			Str("camera_id", rawFrame.CameraID).
+			Dur("timeout", aiTimeout).
+			Msg("AI gRPC call failed (stream continues)")
 		return result
 	}
 
+	// AI succeeded!
 	result.FrameProcessed = true
 	fp.extractDetectionsFromResponse(resp, result)
+
+	log.Debug().
+		Str("camera_id", rawFrame.CameraID).
+		Int("detections", len(result.Detections)).
+		Bool("success", true).
+		Msg("AI processing successful")
+
 	return result
 }
 

@@ -30,9 +30,7 @@ func NewServer(cfg *config.Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize services: %w", err)
 	}
-	if cfg.Environment == "production" {
-		gin.SetMode(gin.ReleaseMode)
-	}
+	gin.SetMode(cfg.GinMode)
 	router := gin.New()
 	router.Use(middleware.RequestID())
 	router.Use(middleware.RequestContext())
@@ -83,16 +81,6 @@ func (s *Server) setupRoutes() {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		s.container.CameraManager.ServeHTTP(c.Writer, c.Request)
 	})
-
-	// Video endpoints for recorded content
-	videoHandler := handlers.NewVideoHandler(s.cfg, s.container.RecorderSvc)
-	videoGroup := s.router.Group("/videos")
-	{
-		videoGroup.GET("/:camera_id/chunks", videoHandler.GetCameraChunks)
-		videoGroup.GET("/:camera_id/chunks/:chunk_id/stream", videoHandler.StreamChunk)
-		videoGroup.GET("/:camera_id/playlist.m3u8", videoHandler.GetHLSPlaylist)
-		videoGroup.GET("/:camera_id/playlist/info", videoHandler.GetPlaylistInfo)
-	}
 
 	// Dynamic Swagger URL based on request host to allow access from any IP
 	s.router.GET("/swagger/*any", func(c *gin.Context) {

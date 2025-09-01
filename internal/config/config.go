@@ -16,6 +16,7 @@ type Config struct {
 	WorkerID    string
 	Port        int
 	LogLevel    string
+	GinMode     string
 
 	// Logdy (lightweight web log viewer)
 	LogdyEnabled bool
@@ -155,6 +156,7 @@ func Load() *Config {
 		WorkerID:    getEnv("WORKER_ID", "worker-1"),
 		Port:        getEnvInt("PORT", 8000),
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
+		GinMode:     getEnv("GIN_MODE", "release"),
 
 		// Logdy (lightweight web log viewer)
 		LogdyEnabled: getEnvBool("LOGDY_ENABLED", true),

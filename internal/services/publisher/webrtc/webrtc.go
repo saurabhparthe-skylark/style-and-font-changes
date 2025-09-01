@@ -340,14 +340,28 @@ func (p *Publisher) processMediaMTXFrames(stream *MediaMTXStream) {
 				continue
 			}
 
-			frameAge := time.Since(latestFrame.Timestamp)
-			if frameAge > 250*time.Millisecond {
+			// Validate frame data thoroughly
+			if len(latestFrame.Data) == 0 {
 				log.Debug().
 					Str("camera_id", stream.cameraID).
-					Dur("frame_age", frameAge).
-					Msg("Skipping old frame")
+					Msg("Skipping frame with no data")
 				continue
 			}
+
+			// Validate frame dimensions and data size
+			expectedSize := latestFrame.Width * latestFrame.Height * 3
+			if len(latestFrame.Data) != expectedSize {
+				log.Debug().
+					Str("camera_id", stream.cameraID).
+					Int("expected_size", expectedSize).
+					Int("actual_size", len(latestFrame.Data)).
+					Int("width", latestFrame.Width).
+					Int("height", latestFrame.Height).
+					Msg("Skipping frame with invalid data size")
+				continue
+			}
+
+			// Remove artificial age limits - let natural frame draining handle realtime behavior
 
 			resizedData, err := p.resizeFrameToStandard(latestFrame.Data, latestFrame.Width, latestFrame.Height)
 			if err != nil {

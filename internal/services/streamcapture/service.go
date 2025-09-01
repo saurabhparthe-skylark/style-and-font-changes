@@ -241,10 +241,6 @@ func (s *Service) sendFrameToPipeline(camera *models.Camera, rawFrame *models.Ra
 
 	select {
 	case rawFramesChan <- rawFrame:
-		log.Debug().
-			Str("camera_id", camera.ID).
-			Int64("frame_id", frameID).
-			Msg("Frame sent to processing pipeline")
 	default:
 		// Buffer is full - conservative frame dropping to prevent temporal jumps
 		droppedRaw := 0

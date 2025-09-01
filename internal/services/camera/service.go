@@ -13,7 +13,6 @@ import (
 	"kepler-worker-go/internal/models"
 	"kepler-worker-go/internal/services/postprocessing"
 	"kepler-worker-go/internal/services/publisher"
-	"kepler-worker-go/internal/services/recorder"
 	"kepler-worker-go/internal/services/streamcapture"
 )
 
@@ -29,16 +28,20 @@ type CameraManager struct {
 	stopChannel  chan struct{}
 	watchdogOnce sync.Once
 
-	// Only stateless services can be shared
+	// Shared publisher for URL generation (stateless)
+	sharedPublisher *publisher.Service
+
+	// Post-processing service (for alerts)
 	postProcessingService *postprocessing.Service
 }
 
 // NewCameraManager creates a new camera manager with complete per-camera resource isolation
-func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service, recorderSvc *recorder.Service, publisherSvc *publisher.Service) (*CameraManager, error) {
+func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service, publisherSvc *publisher.Service) (*CameraManager, error) {
 	cm := &CameraManager{
 		cfg:                   cfg,
 		cameras:               make(map[string]*CameraLifecycle),
 		stopChannel:           make(chan struct{}),
+		sharedPublisher:       publisherSvc, // Only for URL generation
 		postProcessingService: postProcessingSvc,
 	}
 
@@ -131,11 +134,11 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		FPSWindowSize:    30,
 		AIFrameCounter:   0,
 
-		// Generate MediaMTX URLs (these will be handled by per-camera publisher)
-		RTSPUrl:   fmt.Sprintf("rtsp://192.168.1.7:8554/%s", req.CameraID),
-		WebRTCUrl: fmt.Sprintf("ws://192.168.1.7:8889/%s/whep", req.CameraID),
-		HLSUrl:    fmt.Sprintf("http://192.168.1.7:8888/%s/index.m3u8", req.CameraID),
-		MJPEGUrl:  fmt.Sprintf("http://192.168.1.7:%d/mjpeg/%s", cm.cfg.Port, req.CameraID),
+		// Generate MediaMTX URLs using shared publisher service
+		RTSPUrl:   cm.sharedPublisher.GetRTSPURL(req.CameraID),
+		WebRTCUrl: cm.sharedPublisher.GetWebRTCURL(req.CameraID),
+		HLSUrl:    cm.sharedPublisher.GetHLSURL(req.CameraID),
+		MJPEGUrl:  fmt.Sprintf("http://localhost:%d/mjpeg/%s", cm.cfg.Port, req.CameraID),
 	}
 
 	// Create lifecycle manager with completely isolated resources
@@ -302,14 +305,13 @@ func (cm *CameraManager) GetCameras() []*models.CameraResponse {
 // ServeHTTP serves MJPEG stream for a camera using isolated publisher
 func (cm *CameraManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract camera ID from URL path
-	// URL format: /mjpeg/:camera_id
 	path := r.URL.Path
 	if len(path) < 8 || path[:7] != "/mjpeg/" {
 		http.Error(w, "Invalid MJPEG URL format", http.StatusBadRequest)
 		return
 	}
 
-	cameraID := path[7:] // Remove "/mjpeg/" prefix
+	cameraID := path[7:]
 	if cameraID == "" {
 		http.Error(w, "Camera ID is required", http.StatusBadRequest)
 		return
@@ -387,7 +389,6 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	}
 
 	camera := lifecycle.camera
-
 	needsRestart := false
 
 	// Update URL if provided (requires restart)
@@ -403,32 +404,32 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 			Msg("Camera URL updated, will restart camera")
 	}
 
-	// Update projects
+	// Update projects (no restart needed)
 	if req.Projects != nil {
 		camera.Projects = req.Projects
-	}
-
-	// Update AI configuration
-	if req.AIEnabled != nil && *req.AIEnabled != camera.AIEnabled {
-		oldAIEnabled := camera.AIEnabled
-		camera.AIEnabled = *req.AIEnabled
-		needsRestart = true
 		log.Info().
 			Str("camera_id", cameraID).
-			Bool("old_ai_enabled", oldAIEnabled).
-			Bool("new_ai_enabled", camera.AIEnabled).
-			Msg("AI enabled state changed, will restart camera with isolated resources")
+			Strs("projects", req.Projects).
+			Msg("Camera projects updated dynamically")
+	}
+
+	// Update AI configuration (NO RESTART NEEDED - dynamic!)
+	if req.AIEnabled != nil && *req.AIEnabled != camera.AIEnabled {
+		camera.AIEnabled = *req.AIEnabled
+		log.Info().
+			Str("camera_id", cameraID).
+			Bool("ai_enabled", camera.AIEnabled).
+			Msg("AI state changed dynamically")
 	}
 
 	if req.AIEndpoint != nil && *req.AIEndpoint != camera.AIEndpoint {
 		oldAIEndpoint := camera.AIEndpoint
 		camera.AIEndpoint = *req.AIEndpoint
-		needsRestart = true
 		log.Info().
 			Str("camera_id", cameraID).
 			Str("old_ai_endpoint", oldAIEndpoint).
 			Str("new_ai_endpoint", camera.AIEndpoint).
-			Msg("AI endpoint changed, will restart camera")
+			Msg("AI endpoint changed dynamically (no restart needed)")
 	}
 
 	// Update recording settings (no restart needed)
@@ -468,7 +469,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	if needsRestart && lifecycle.getState() == StateRunning {
 		log.Info().
 			Str("camera_id", cameraID).
-			Msg("Restarting camera due to configuration changes with isolated resources")
+			Msg("Restarting camera due to URL change")
 
 		return lifecycle.Restart()
 	}
@@ -494,12 +495,12 @@ func (cm *CameraManager) RestartCamera(cameraID string) error {
 		return fmt.Errorf("camera %s not found", cameraID)
 	}
 
-	log.Info().Str("camera_id", cameraID).Msg("Performing camera restart with isolated resources")
+	log.Info().Str("camera_id", cameraID).Msg("Performing camera restart")
 
 	return lifecycle.Restart()
 }
 
-// ForceRestartCamera forces a restart of the camera (for recovery from stuck states)
+// ForceRestartCamera forces a restart of the camera
 func (cm *CameraManager) ForceRestartCamera(cameraID string) error {
 	cm.mutex.RLock()
 	lifecycle, exists := cm.cameras[cameraID]
@@ -514,7 +515,7 @@ func (cm *CameraManager) ForceRestartCamera(cameraID string) error {
 	return lifecycle.ForceRestart()
 }
 
-// Safe channel closing helper functions to prevent "close of closed channel" panics
+// Safe channel closing helper
 func (cm *CameraManager) safeCloseStopChannel(ch chan struct{}, cameraID string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -545,11 +546,11 @@ func (cm *CameraManager) ResyncRealtime(cameraID string) error {
 	return lifecycle.Restart()
 }
 
-// ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail
+// ValidateRTSPAndCaptureThumbnail validates RTSP stream
 func (cm *CameraManager) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCheckResponse {
-	log.Info().Str("rtsp_url", rtspURL).Msg("Validating RTSP stream with isolated services")
+	log.Info().Str("rtsp_url", rtspURL).Msg("Validating RTSP stream")
 
-	// We need to create a temporary streamcapture service for validation
+	// Create temporary streamcapture service for validation
 	tempStreamCapture := streamcapture.NewService(cm.cfg)
 	return tempStreamCapture.ValidateRTSPAndCaptureThumbnail(rtspURL)
 }

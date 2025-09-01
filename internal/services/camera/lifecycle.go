@@ -37,41 +37,41 @@ func (s CameraState) String() string {
 	}
 }
 
-// CameraLifecycle manages a single camera with completely isolated resources
+// CameraLifecycle manages a single camera with isolated resources
 type CameraLifecycle struct {
 	camera *models.Camera
 	cm     *CameraManager
 
-	// Simple state management
+	// State management
 	state   int32
-	running int32 // 0 = stopped, 1 = running
+	running int32
 
-	// Single context for everything
+	// Context for lifecycle
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// Synchronization for proper shutdown
+	// Shutdown synchronization
 	shutdownDone chan struct{}
 	streamDone   chan struct{}
 
-	// Per-camera isolated services (NO SHARING!)
+	// Per-camera isolated services
 	frameProcessor   *frameprocessing.FrameProcessor
 	publisherSvc     *publisher.Service
 	streamCaptureSvc *streamcapture.Service
 
-	// Service mutexes for safe access
+	// Service access mutexes
 	fpMutex     sync.RWMutex
 	pubMutex    sync.RWMutex
 	streamMutex sync.RWMutex
 
-	// Simple channel management
+	// Channel management
 	mu sync.RWMutex
 
-	// Cleanup synchronization
+	// Cleanup coordination
 	cleanupOnce sync.Once
 }
 
-// NewCameraLifecycle creates a new camera lifecycle manager with completely isolated resources
+// NewCameraLifecycle creates a new camera lifecycle manager
 func NewCameraLifecycle(camera *models.Camera, cm *CameraManager) *CameraLifecycle {
 	cl := &CameraLifecycle{
 		camera: camera,
@@ -104,27 +104,19 @@ func (cl *CameraLifecycle) createChannels() {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
 
-	// Use config buffer sizes
 	rawBufferSize := cl.cm.cfg.FrameBufferSize
 	processedBufferSize := cl.cm.cfg.PublishingBuffer
 
-	// Create fresh channels
 	cl.camera.RawFrames = make(chan *models.RawFrame, rawBufferSize)
 	cl.camera.ProcessedFrames = make(chan *models.ProcessedFrame, processedBufferSize)
 	cl.camera.AlertFrames = make(chan *models.ProcessedFrame, processedBufferSize)
 	cl.camera.RecorderFrames = make(chan *models.ProcessedFrame, processedBufferSize)
 	cl.camera.StopChannel = make(chan struct{})
 
-	log.Debug().
-		Str("camera_id", cl.camera.ID).
-		Int("raw_buffer_size", rawBufferSize).
-		Int("processed_buffer_size", processedBufferSize).
-		Msg("Created isolated camera channels")
 }
 
-// createIsolatedServices creates dedicated services for this camera
-func (cl *CameraLifecycle) createIsolatedServices() error {
-	// Clean up existing services first
+// createServices creates dedicated services
+func (cl *CameraLifecycle) createServices() error {
 	cl.cleanupServices()
 
 	cl.fpMutex.Lock()
@@ -139,32 +131,27 @@ func (cl *CameraLifecycle) createIsolatedServices() error {
 	// Create dedicated frame processor
 	cl.frameProcessor, err = frameprocessing.NewFrameProcessorWithCamera(cl.cm.cfg, cl.camera)
 	if err != nil {
-		log.Error().
-			Err(err).
-			Str("camera_id", cl.camera.ID).
-			Msg("Failed to create dedicated frame processor, will continue without AI")
-		cl.frameProcessor = nil // Explicitly set to nil on failure
+		cl.frameProcessor, _ = frameprocessing.NewFrameProcessor(cl.cm.cfg)
 	}
 
 	// Create dedicated publisher service
 	cl.publisherSvc, err = publisher.NewService(cl.cm.cfg)
 	if err != nil {
-		return fmt.Errorf("failed to create dedicated publisher for camera %s: %w", cl.camera.ID, err)
+		return fmt.Errorf("failed to create publisher for camera %s: %w", cl.camera.ID, err)
 	}
 
 	// Create dedicated stream capture service
 	cl.streamCaptureSvc = streamcapture.NewService(cl.cm.cfg)
 
-	log.Info().
+	log.Debug().
 		Str("camera_id", cl.camera.ID).
 		Bool("ai_enabled", cl.camera.AIEnabled).
-		Bool("has_frame_processor", cl.frameProcessor != nil).
-		Msg("Created dedicated isolated services for camera")
+		Msg("Created isolated services")
 
 	return nil
 }
 
-// getServices safely gets the isolated services
+// Service getters
 func (cl *CameraLifecycle) getFrameProcessor() *frameprocessing.FrameProcessor {
 	cl.fpMutex.RLock()
 	defer cl.fpMutex.RUnlock()
@@ -183,7 +170,7 @@ func (cl *CameraLifecycle) getStreamCaptureService() *streamcapture.Service {
 	return cl.streamCaptureSvc
 }
 
-// Start starts the camera with completely isolated resources
+// Start starts the camera
 func (cl *CameraLifecycle) Start() error {
 	if !atomic.CompareAndSwapInt32(&cl.state, int32(StateStopped), int32(StateRunning)) {
 		return fmt.Errorf("camera %s cannot start from state %s", cl.camera.ID, cl.getState())
@@ -191,7 +178,7 @@ func (cl *CameraLifecycle) Start() error {
 
 	log.Info().
 		Str("camera_id", cl.camera.ID).
-		Msg("Starting camera with completely isolated resources")
+		Msg("Starting camera")
 
 	// Create fresh context
 	cl.ctx, cl.cancel = context.WithCancel(context.Background())
@@ -200,8 +187,6 @@ func (cl *CameraLifecycle) Start() error {
 	// Create synchronization channels
 	cl.shutdownDone = make(chan struct{})
 	cl.streamDone = make(chan struct{})
-
-	// Reset cleanup once
 	cl.cleanupOnce = sync.Once{}
 
 	// Reset camera state
@@ -214,34 +199,25 @@ func (cl *CameraLifecycle) Start() error {
 	cl.camera.AIDetectionCount = 0
 	cl.camera.LastAIError = ""
 
-	// Create fresh channels
+	// Create fresh channels and services
 	cl.createChannels()
-
-	// Create completely isolated services for this camera
-	if err := cl.createIsolatedServices(); err != nil {
-		log.Error().
-			Err(err).
-			Str("camera_id", cl.camera.ID).
-			Msg("Failed to create isolated services")
+	if err := cl.createServices(); err != nil {
 		cl.setState(StateStopped)
 		atomic.StoreInt32(&cl.running, 0)
 		return err
 	}
 
-	// Start frame processors
-	cl.startFrameProcessors()
-
-	// Start main capture goroutine
+	// Start everything in one place
 	go cl.runCamera()
 
 	log.Info().
 		Str("camera_id", cl.camera.ID).
-		Msg("Camera started successfully with completely isolated resources")
+		Msg("Camera started successfully")
 
 	return nil
 }
 
-// Stop stops the camera with proper cleanup and synchronization
+// Stop stops the camera
 func (cl *CameraLifecycle) Stop() error {
 	if !atomic.CompareAndSwapInt32(&cl.state, int32(StateRunning), int32(StateStopping)) {
 		return fmt.Errorf("camera %s cannot stop from state %s", cl.camera.ID, cl.getState())
@@ -249,80 +225,48 @@ func (cl *CameraLifecycle) Stop() error {
 
 	log.Info().
 		Str("camera_id", cl.camera.ID).
-		Msg("Stopping camera with aggressive cleanup and synchronization")
+		Msg("Stopping camera")
 
-	// Signal stop immediately
 	atomic.StoreInt32(&cl.running, 0)
 
-	// Cancel context to stop all goroutines IMMEDIATELY
 	if cl.cancel != nil {
 		cl.cancel()
-		log.Debug().Str("camera_id", cl.camera.ID).Msg("Context cancelled for immediate stop")
 	}
 
-	// Close stop channel aggressively
 	func() {
 		defer func() { _ = recover() }()
 		if cl.camera.StopChannel != nil {
 			close(cl.camera.StopChannel)
-			log.Debug().Str("camera_id", cl.camera.ID).Msg("Stop channel closed")
 		}
 	}()
 
-	// Wait for stream capture to properly stop with timeout
-	log.Debug().Str("camera_id", cl.camera.ID).Msg("Waiting for stream capture to stop...")
-	select {
-	case <-cl.streamDone:
-		log.Debug().Str("camera_id", cl.camera.ID).Msg("Stream capture stopped properly")
-	case <-time.After(5 * time.Second):
-		log.Warn().Str("camera_id", cl.camera.ID).Msg("Timeout waiting for stream capture to stop")
-	}
-
-	// Wait for all shutdown processes with timeout
-	log.Debug().Str("camera_id", cl.camera.ID).Msg("Waiting for complete shutdown...")
+	// Wait for shutdown
 	select {
 	case <-cl.shutdownDone:
-		log.Debug().Str("camera_id", cl.camera.ID).Msg("Complete shutdown confirmed")
-	case <-time.After(3 * time.Second):
-		log.Warn().Str("camera_id", cl.camera.ID).Msg("Timeout waiting for complete shutdown")
+		log.Debug().Str("camera_id", cl.camera.ID).Msg("Shutdown confirmed")
+	case <-time.After(5 * time.Second):
+		log.Warn().Str("camera_id", cl.camera.ID).Msg("Shutdown timeout")
 	}
 
-	// Clean up all resources
 	cl.cleanup()
-
 	cl.camera.IsActive = false
 	cl.setState(StateStopped)
 
 	log.Info().
 		Str("camera_id", cl.camera.ID).
-		Msg("Camera stopped successfully with synchronized cleanup")
+		Msg("Camera stopped successfully")
 
 	return nil
 }
 
-// Restart restarts the camera with aggressive cleanup and synchronization
+// Restart restarts the camera
 func (cl *CameraLifecycle) Restart() error {
 	log.Info().
 		Str("camera_id", cl.camera.ID).
-		Msg("Restarting camera with aggressive cleanup and synchronization")
+		Msg("Restarting camera")
 
-	// Ensure complete stop first with full synchronization
-	if err := cl.Stop(); err != nil {
-		log.Warn().
-			Err(err).
-			Str("camera_id", cl.camera.ID).
-			Msg("Error during stop phase of restart")
-	}
-
-	// Longer pause to ensure absolutely complete cleanup
-	log.Debug().
-		Str("camera_id", cl.camera.ID).
-		Msg("Waiting for complete resource cleanup before restart...")
-
-	// Start fresh
-	log.Info().
-		Str("camera_id", cl.camera.ID).
-		Msg("Starting fresh instance after complete cleanup")
+	_ = cl.Stop()
+	time.Sleep(300 * time.Millisecond)
 	return cl.Start()
 }
 
@@ -331,9 +275,350 @@ func (cl *CameraLifecycle) ForceRestart() error {
 	return cl.Restart()
 }
 
-// cleanupServices cleans up isolated services
+// ========================================
+// MAIN CAMERA LOOP - Everything happens here
+// ========================================
+
+// runCamera - Single method that runs everything
+func (cl *CameraLifecycle) runCamera() {
+	defer func() {
+		// Signal shutdown
+		func() {
+			defer func() { _ = recover() }()
+			close(cl.shutdownDone)
+		}()
+
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Camera panic recovered")
+			_ = cl.Stop()
+		}
+	}()
+
+	log.Debug().
+		Str("camera_id", cl.camera.ID).
+		Msg("Camera capture and processing started")
+
+	// Start frame processor, publisher, and alert processor in background
+	go cl.runFrameProcessor()
+	go cl.runPublisher()
+	go cl.runAlertProcessor()
+
+	// Main capture loop
+	streamSvc := cl.getStreamCaptureService()
+	if streamSvc == nil {
+		log.Error().
+			Str("camera_id", cl.camera.ID).
+			Msg("No stream capture service")
+		return
+	}
+
+	for cl.isRunning() {
+		select {
+		case <-cl.ctx.Done():
+			log.Info().
+				Str("camera_id", cl.camera.ID).
+				Msg("Camera context cancelled")
+			return
+		default:
+			err := streamSvc.StartVideoCaptureProcess(cl.ctx, cl.camera)
+
+			if err != nil && cl.isRunning() {
+				log.Error().
+					Err(err).
+					Str("camera_id", cl.camera.ID).
+					Msg("Video capture failed, retrying")
+
+				cl.camera.ErrorCount++
+				delay := time.Duration(cl.camera.ErrorCount) * time.Second
+				if delay > 10*time.Second {
+					delay = 10 * time.Second
+				}
+
+				select {
+				case <-cl.ctx.Done():
+					return
+				case <-time.After(delay):
+					continue
+				}
+			}
+		}
+	}
+
+	log.Info().
+		Str("camera_id", cl.camera.ID).
+		Msg("Camera capture ended")
+}
+
+// runFrameProcessor processes frames
+func (cl *CameraLifecycle) runFrameProcessor() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Frame processor panic recovered")
+		}
+	}()
+
+	for cl.isRunning() {
+		select {
+		case <-cl.ctx.Done():
+			return
+		case rawFrame, ok := <-cl.camera.RawFrames:
+			if !ok {
+				return
+			}
+			cl.processFrame(rawFrame)
+		case <-time.After(1 * time.Second):
+			continue
+		}
+	}
+
+}
+
+// processFrame processes a single frame simply
+func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Process frame panic recovered")
+		}
+	}()
+
+	if rawFrame == nil {
+		return
+	}
+
+	// Update camera statistics
+	streamSvc := cl.getStreamCaptureService()
+	if streamSvc != nil {
+		cl.camera.FPS = streamSvc.CalculateFPS(cl.camera)
+	}
+	cl.camera.Latency = time.Since(rawFrame.Timestamp)
+
+	// Get frame processor
+	processor := cl.getFrameProcessor()
+
+	var processedFrame *models.ProcessedFrame
+
+	if processor != nil {
+		// Try frame processing with error protection
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().
+						Str("camera_id", cl.camera.ID).
+						Interface("panic", r).
+						Msg("Frame processor panic - creating basic frame")
+					processedFrame = nil // Force fallback
+				}
+			}()
+
+			processedFrame = processor.ProcessFrame(rawFrame, cl.camera.Projects, cl.camera.FPS, cl.camera.Latency)
+		}()
+	}
+
+	// Fallback if processor failed or doesn't exist
+	if processedFrame == nil {
+		processedFrame = &models.ProcessedFrame{
+			CameraID:     rawFrame.CameraID,
+			Data:         rawFrame.Data,
+			RawData:      rawFrame.Data,
+			Timestamp:    rawFrame.Timestamp,
+			FrameID:      rawFrame.FrameID,
+			Width:        rawFrame.Width,
+			Height:       rawFrame.Height,
+			FPS:          cl.camera.FPS,
+			Latency:      cl.camera.Latency,
+			AIEnabled:    cl.camera.AIEnabled,
+			AIDetections: nil,
+		}
+	}
+
+	// Update AI statistics
+	if processedFrame.AIDetections != nil {
+		if aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult); ok {
+			cl.camera.AIProcessingTime = aiResult.ProcessingTime
+			cl.camera.AIDetectionCount += int64(len(aiResult.Detections))
+
+			if aiResult.ErrorMessage != "" {
+				cl.camera.LastAIError = aiResult.ErrorMessage
+				cl.camera.ErrorCount++
+			} else if aiResult.FrameProcessed {
+				cl.camera.LastAIError = ""
+			}
+		}
+	}
+
+	// Send frame to publisher
+	select {
+	case cl.camera.ProcessedFrames <- processedFrame:
+	default:
+	}
+
+	// Send frame to alert processor if AI is enabled and there are detections
+	if cl.camera.AIEnabled && processedFrame.AIDetections != nil {
+		if aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult); ok && len(aiResult.Detections) > 0 {
+			select {
+			case cl.camera.AlertFrames <- processedFrame:
+			default:
+			}
+		}
+	}
+}
+
+// runPublisher publishes frames
+func (cl *CameraLifecycle) runPublisher() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Publisher panic recovered")
+		}
+	}()
+
+	for cl.isRunning() {
+		select {
+		case <-cl.ctx.Done():
+			return
+		case processedFrame, ok := <-cl.camera.ProcessedFrames:
+			if !ok {
+				return
+			}
+			cl.publishFrame(processedFrame)
+		case <-time.After(1 * time.Second):
+			continue
+		}
+	}
+
+}
+
+// publishFrame publishes a single frame
+func (cl *CameraLifecycle) publishFrame(processedFrame *models.ProcessedFrame) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Publish frame panic recovered")
+		}
+	}()
+
+	if processedFrame == nil {
+		return
+	}
+
+	publisherSvc := cl.getPublisherService()
+	if publisherSvc == nil {
+		return
+	}
+
+	err := publisherSvc.PublishFrame(processedFrame)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("camera_id", cl.camera.ID).
+			Msg("Failed to publish frame")
+		cl.camera.ErrorCount++
+	}
+}
+
+// runAlertProcessor processes alerts
+func (cl *CameraLifecycle) runAlertProcessor() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Alert processor panic recovered")
+		}
+	}()
+
+	for cl.isRunning() {
+		select {
+		case <-cl.ctx.Done():
+			return
+		case processedFrame, ok := <-cl.camera.AlertFrames:
+			if !ok {
+				return
+			}
+			cl.processAlert(processedFrame)
+		case <-time.After(1 * time.Second):
+			continue
+		}
+	}
+}
+
+// processAlert processes a single alert frame
+func (cl *CameraLifecycle) processAlert(processedFrame *models.ProcessedFrame) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().
+				Str("camera_id", cl.camera.ID).
+				Interface("panic", r).
+				Msg("Process alert panic recovered")
+		}
+	}()
+
+	// Only process alerts if AI is enabled
+	if !cl.camera.AIEnabled || processedFrame == nil {
+		return
+	}
+
+	// Use post-processing service if available
+	if cl.cm.postProcessingService != nil {
+		aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult)
+		if !ok || len(aiResult.Detections) == 0 {
+			return
+		}
+
+		detections := aiResult.Detections
+
+		frameMetadata := models.FrameMetadata{
+			FrameID:     processedFrame.FrameID,
+			Timestamp:   processedFrame.Timestamp,
+			Width:       processedFrame.Width,
+			Height:      processedFrame.Height,
+			AllDetCount: len(aiResult.Detections),
+			CameraID:    cl.camera.ID,
+		}
+
+		result := cl.cm.postProcessingService.ProcessDetections(
+			cl.camera.ID,
+			detections,
+			frameMetadata,
+			processedFrame.RawData,
+			processedFrame.Data,
+		)
+
+		if len(result.Errors) > 0 {
+			log.Warn().
+				Str("camera_id", cl.camera.ID).
+				Strs("errors", result.Errors).
+				Msg("Alert processing had errors")
+		}
+
+		if result.AlertsCreated > 0 {
+			log.Info().
+				Str("camera_id", cl.camera.ID).
+				Int("alerts_created", result.AlertsCreated).
+				Msg("Alerts processed successfully")
+		}
+	}
+}
+
+// ========================================
+// CLEANUP AND RESOURCE MANAGEMENT
+// ========================================
+
+// cleanupServices cleans up services
 func (cl *CameraLifecycle) cleanupServices() {
-	// Clean up frame processor
 	cl.fpMutex.Lock()
 	if cl.frameProcessor != nil {
 		cl.frameProcessor.Shutdown()
@@ -341,25 +626,15 @@ func (cl *CameraLifecycle) cleanupServices() {
 	}
 	cl.fpMutex.Unlock()
 
-	// Clean up publisher service
 	cl.pubMutex.Lock()
 	if cl.publisherSvc != nil {
-		// Stop any active streams for this camera
-		if err := cl.publisherSvc.StopStream(cl.camera.ID); err != nil {
-			log.Error().
-				Err(err).
-				Str("camera_id", cl.camera.ID).
-				Msg("Error stopping publisher stream")
-		}
-		// Note: We don't shutdown the publisher service as it might be shared
+		cl.publisherSvc.StopStream(cl.camera.ID)
 		cl.publisherSvc = nil
 	}
 	cl.pubMutex.Unlock()
 
-	// Clean up stream capture service
 	cl.streamMutex.Lock()
 	if cl.streamCaptureSvc != nil {
-		// Stream capture service is stateless, just nil the reference
 		cl.streamCaptureSvc = nil
 	}
 	cl.streamMutex.Unlock()
@@ -368,14 +643,8 @@ func (cl *CameraLifecycle) cleanupServices() {
 // cleanup cleans up all resources
 func (cl *CameraLifecycle) cleanup() {
 	cl.cleanupOnce.Do(func() {
-		log.Debug().
-			Str("camera_id", cl.camera.ID).
-			Msg("Starting complete resource cleanup")
-
-		// Clean up services first
 		cl.cleanupServices()
 
-		// Close channels safely
 		cl.mu.Lock()
 		defer cl.mu.Unlock()
 
@@ -407,107 +676,5 @@ func (cl *CameraLifecycle) cleanup() {
 			}
 		}()
 
-		log.Debug().
-			Str("camera_id", cl.camera.ID).
-			Msg("Complete resource cleanup finished")
 	})
-}
-
-// runCamera runs everything in a single goroutine with proper error handling and synchronization
-func (cl *CameraLifecycle) runCamera() {
-	defer func() {
-		// Signal that stream capture is done
-		func() {
-			defer func() { _ = recover() }()
-			close(cl.streamDone)
-		}()
-
-		// Signal complete shutdown
-		func() {
-			defer func() { _ = recover() }()
-			close(cl.shutdownDone)
-		}()
-
-		if r := recover(); r != nil {
-			log.Error().
-				Str("camera_id", cl.camera.ID).
-				Interface("panic", r).
-				Msg("Camera main loop panic recovered, stopping camera")
-			_ = cl.Stop()
-		}
-	}()
-
-	log.Info().
-		Str("camera_id", cl.camera.ID).
-		Msg("Camera main capture loop started with isolated services and synchronization")
-
-	// Get dedicated stream capture service
-	streamCaptureSvc := cl.getStreamCaptureService()
-	if streamCaptureSvc == nil {
-		log.Error().
-			Str("camera_id", cl.camera.ID).
-			Msg("No stream capture service available")
-		return
-	}
-
-	for cl.isRunning() {
-		select {
-		case <-cl.ctx.Done():
-			log.Info().
-				Str("camera_id", cl.camera.ID).
-				Msg("Camera context cancelled - stopping stream capture immediately")
-			return
-		default:
-			// Run capture with dedicated service and proper context
-			log.Debug().
-				Str("camera_id", cl.camera.ID).
-				Msg("Starting video capture process with context")
-
-			err := streamCaptureSvc.StartVideoCaptureProcess(cl.ctx, cl.camera)
-
-			// Check if context was cancelled during capture
-			select {
-			case <-cl.ctx.Done():
-				log.Info().
-					Str("camera_id", cl.camera.ID).
-					Msg("Context cancelled during video capture - exiting immediately")
-				return
-			default:
-			}
-
-			if err != nil && cl.isRunning() {
-				log.Error().
-					Err(err).
-					Str("camera_id", cl.camera.ID).
-					Msg("Video capture failed, retrying with backoff")
-
-				cl.camera.ErrorCount++
-
-				// Backoff delay with context cancellation check
-				delay := time.Duration(cl.camera.ErrorCount) * time.Second
-				if delay > 10*time.Second {
-					delay = 10 * time.Second
-				}
-
-				log.Debug().
-					Str("camera_id", cl.camera.ID).
-					Dur("delay", delay).
-					Msg("Waiting before retry")
-
-				select {
-				case <-cl.ctx.Done():
-					log.Info().
-						Str("camera_id", cl.camera.ID).
-						Msg("Context cancelled during backoff - exiting immediately")
-					return
-				case <-time.After(delay):
-					continue
-				}
-			}
-		}
-	}
-
-	log.Info().
-		Str("camera_id", cl.camera.ID).
-		Msg("Camera main capture loop ended")
 }
