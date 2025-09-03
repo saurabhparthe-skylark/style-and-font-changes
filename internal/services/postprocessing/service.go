@@ -11,7 +11,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"kepler-worker-go/internal/config"
-	"kepler-worker-go/internal/helpers"
 	"kepler-worker-go/internal/models"
 	"kepler-worker-go/internal/services/postprocessing/alerts"
 	"kepler-worker-go/internal/services/postprocessing/suppressions"
@@ -309,10 +308,6 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 		return alerts.HandlePersonDetection(detection, decision)
 
 	case models.DetectionTypeGeneral:
-		// Intrusion flag can be present on general/person detections
-		if detection.IsIntrusion != nil && *detection.IsIntrusion {
-			return alerts.HandleIntrusionDetection(detection, decision)
-		}
 		return alerts.HandleGeneralDetection(detection, decision)
 
 	default:
@@ -354,11 +349,8 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 	case models.AlertTypeSelfLearned:
 		payload = alerts.BuildConsolidatedSelfLearningAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
-	case models.AlertTypePersonDetection, models.AlertTypeIntrusionDetection:
+	case models.AlertTypePersonDetection:
 		payload = alerts.BuildConsolidatedPersonAlert(detections, cameraID, rawFrameData, annotatedFrameData)
-
-	case models.AlertTypeHighConfidence:
-		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	default:
 		log.Warn().
@@ -391,18 +383,6 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 		payload.DetectionRecord.DetectionCountInFrame = len(detections) // Use actual detection count
 	}
 
-	// Skip payload optimization for performance (NATS limits will be increased)
-	if s.cfg.ImageCompressionEnabled {
-		if err := helpers.OptimizePayloadForSizeWithConfig(&payload, s.cfg); err != nil {
-			log.Warn().
-				Err(err).
-				Str("camera_id", cameraID).
-				Int("detection_count", len(detections)).
-				Str("alert_type", string(payload.Alert.AlertType)).
-				Msg("Payload size validation failed, but continuing for performance")
-		}
-	}
-
 	// Require at least one detection image; skip if cropping failed
 	if len(payload.DetectionImages) == 0 {
 		log.Warn().
@@ -428,6 +408,13 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 			Msg("Failed to publish consolidated alert")
 		return err
 	}
+
+	log.Info().
+		Str("camera_id", cameraID).
+		Int("detection_count", len(detections)).
+		Str("alert_type", string(payload.Alert.AlertType)).
+		Dur("processing_time", time.Since(start)).
+		Msg("Alert published successfully")
 
 	return nil
 }
@@ -481,22 +468,15 @@ func (s *Service) processSuppressionDirectly(detection models.Detection, decisio
 		payload.SuppressionRecord.FrameID = frameMetadata.FrameID
 	}
 
-	// Skip payload optimization for performance (NATS limits will be increased)
-	if s.cfg.ImageCompressionEnabled {
-		if err := helpers.OptimizePayloadForSizeWithConfig(&payload, s.cfg); err != nil {
-			log.Warn().
-				Err(err).
-				Str("camera_id", cameraID).
-				Int32("track_id", detection.TrackID).
-				Str("suppression_type", string(payload.Suppression.SuppressionType)).
-				Msg("Suppression payload size validation failed, but continuing for performance")
-		}
-	}
-
 	// Publish suppression
 	subject := s.cfg.SuppressionSubject
 	if subject == "" {
 		subject = "suppressions.all"
+	}
+
+	//If no detection images, skip publishing
+	if len(payload.DetectionImages) == 0 {
+		return nil
 	}
 
 	if err := s.publisher.Publish(subject, payload); err != nil {
@@ -650,18 +630,6 @@ func (s *Service) processSingleAlert(detection models.Detection, decision models
 	if payload.DetectionRecord.FrameID == 0 {
 		payload.DetectionRecord.FrameID = frameMetadata.FrameID
 		payload.DetectionRecord.DetectionCountInFrame = 1
-	}
-
-	// Optional payload optimization
-	if s.cfg.ImageCompressionEnabled {
-		if err := helpers.OptimizePayloadForSizeWithConfig(&payload, s.cfg); err != nil {
-			log.Warn().
-				Err(err).
-				Str("camera_id", cameraID).
-				Int32("track_id", detection.TrackID).
-				Str("alert_type", string(payload.Alert.AlertType)).
-				Msg("Payload size validation failed, but continuing for performance")
-		}
 	}
 
 	// Require at least one detection image; skip if cropping failed

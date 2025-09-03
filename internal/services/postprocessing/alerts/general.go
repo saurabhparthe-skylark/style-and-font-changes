@@ -17,7 +17,7 @@ func HandleGeneralDetection(detection models.Detection, decision models.AlertDec
 	}
 
 	decision.ShouldAlert = true
-	decision.AlertType = models.AlertTypeHighConfidence
+	decision.AlertType = models.AlertTypeGeneralDetection
 	decision.Severity = models.AlertSeverityMedium
 	decision.Title = fmt.Sprintf("%s Detection", strings.Title(detection.Label))
 	decision.Description = fmt.Sprintf("%s detected with %.1f%% confidence", detection.Label, detection.Score*100)
@@ -33,7 +33,7 @@ func BuildGeneralAlert(detection models.Detection, cameraID string, frame []byte
 	// Create alert decision
 	decision := models.AlertDecision{
 		ShouldAlert:  true,
-		AlertType:    models.AlertTypeHighConfidence,
+		AlertType:    models.AlertTypeGeneralDetection,
 		Severity:     models.AlertSeverityMedium,
 		Title:        fmt.Sprintf("%s Detection", strings.Title(detection.Label)),
 		Description:  fmt.Sprintf("%s detected with %.1f%% confidence", detection.Label, detection.Score*100),
@@ -93,7 +93,7 @@ func BuildConsolidatedGeneralAlert(detections []models.Detection, cameraID strin
 	// Create alert decision
 	decision := models.AlertDecision{
 		ShouldAlert:  true,
-		AlertType:    models.AlertTypeHighConfidence,
+		AlertType:    models.AlertTypeGeneralDetection,
 		Severity:     models.AlertSeverityMedium,
 		Title:        fmt.Sprintf("%s Detection (%d objects)", strings.Title(primaryDetection.Label), totalDetections),
 		Description:  fmt.Sprintf("%d %s objects detected with high confidence", totalDetections, primaryDetection.Label),

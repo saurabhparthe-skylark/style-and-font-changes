@@ -42,8 +42,8 @@ const (
 	AlertTypeAnomalyDetection   AlertType = "ANOMALY_DETECTION"
 	AlertTypeSelfLearned        AlertType = "SELF_LEARNED_DETECTION"
 	AlertTypePersonDetection    AlertType = "PERSON_DETECTION"
-	AlertTypeHighConfidence     AlertType = "HIGH_CONFIDENCE_DETECTION"
 	AlertTypeIntrusionDetection AlertType = "INTRUSION_DETECTION"
+	AlertTypeGeneralDetection   AlertType = "GENERAL_DETECTION"
 )
 
 // AlertSeverity represents the severity level of alerts

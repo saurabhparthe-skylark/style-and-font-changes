@@ -109,7 +109,7 @@ func (cl *CameraLifecycle) createChannels() {
 
 	cl.camera.RawFrames = make(chan *models.RawFrame, rawBufferSize)
 	cl.camera.ProcessedFrames = make(chan *models.ProcessedFrame, processedBufferSize)
-	cl.camera.AlertFrames = make(chan *models.ProcessedFrame, processedBufferSize)
+	cl.camera.PostProcessingFrames = make(chan *models.ProcessedFrame, processedBufferSize)
 	cl.camera.RecorderFrames = make(chan *models.ProcessedFrame, processedBufferSize)
 	cl.camera.StopChannel = make(chan struct{})
 
@@ -304,7 +304,7 @@ func (cl *CameraLifecycle) runCamera() {
 	// Start frame processor, publisher, and alert processor in background
 	go cl.runFrameProcessor()
 	go cl.runPublisher()
-	go cl.runAlertProcessor()
+	go cl.runPostProcessor()
 
 	// Main capture loop
 	streamSvc := cl.getStreamCaptureService()
@@ -507,7 +507,7 @@ func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
 	if cl.camera.AIEnabled && processedFrame.AIDetections != nil {
 		if aiResult, ok := processedFrame.AIDetections.(*models.AIProcessingResult); ok && len(aiResult.Detections) > 0 {
 			select {
-			case cl.camera.AlertFrames <- processedFrame:
+			case cl.camera.PostProcessingFrames <- processedFrame:
 			default:
 			}
 		}
@@ -597,14 +597,14 @@ func (cl *CameraLifecycle) publishFrame(processedFrame *models.ProcessedFrame) {
 	}
 }
 
-// runAlertProcessor processes alerts
-func (cl *CameraLifecycle) runAlertProcessor() {
+// runPostProcessor processes alerts
+func (cl *CameraLifecycle) runPostProcessor() {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
 				Str("camera_id", cl.camera.ID).
 				Interface("panic", r).
-				Msg("Alert processor panic recovered")
+				Msg("Post processor panic recovered")
 		}
 	}()
 
@@ -612,25 +612,25 @@ func (cl *CameraLifecycle) runAlertProcessor() {
 		select {
 		case <-cl.ctx.Done():
 			return
-		case processedFrame, ok := <-cl.camera.AlertFrames:
+		case processedFrame, ok := <-cl.camera.PostProcessingFrames:
 			if !ok {
 				return
 			}
-			cl.processAlert(processedFrame)
+			cl.processPost(processedFrame)
 		case <-time.After(1 * time.Second):
 			continue
 		}
 	}
 }
 
-// processAlert processes a single alert frame
-func (cl *CameraLifecycle) processAlert(processedFrame *models.ProcessedFrame) {
+// processPost processes a single post frame
+func (cl *CameraLifecycle) processPost(processedFrame *models.ProcessedFrame) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
 				Str("camera_id", cl.camera.ID).
 				Interface("panic", r).
-				Msg("Process alert panic recovered")
+				Msg("Process post panic recovered")
 		}
 	}()
 
@@ -670,13 +670,6 @@ func (cl *CameraLifecycle) processAlert(processedFrame *models.ProcessedFrame) {
 				Str("camera_id", cl.camera.ID).
 				Strs("errors", result.Errors).
 				Msg("Alert processing had errors")
-		}
-
-		if result.AlertsCreated > 0 {
-			log.Info().
-				Str("camera_id", cl.camera.ID).
-				Int("alerts_created", result.AlertsCreated).
-				Msg("Alerts processed successfully")
 		}
 	}
 }
@@ -732,8 +725,8 @@ func (cl *CameraLifecycle) cleanup() {
 
 		func() {
 			defer func() { _ = recover() }()
-			if cl.camera.AlertFrames != nil {
-				close(cl.camera.AlertFrames)
+			if cl.camera.PostProcessingFrames != nil {
+				close(cl.camera.PostProcessingFrames)
 			}
 		}()
 
