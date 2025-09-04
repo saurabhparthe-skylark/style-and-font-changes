@@ -1,0 +1,43 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+
+
+So this is our worker. its main purpose is to read the streams , process the frames and publish them.
+
+Folder structure : 
+
+This is a golang repository
+
+1) cmd/worker/main.go is the entrypoint of our app
+2) docs is the generted swagger docs using swag
+3) docker contains docker relted stuff
+4) internal contains :
+   a) Api where , gin http api's are configured
+   b) config contains the config of entire app we read env from this as well.
+   c) helpers contains helperfunctions which can be imported and use in all the app
+   d) logging contains zero log setup and main logging functions
+   e) models contains all the struct and types
+   f) services contains core services of the map explaned in detailed in below architecture
+   g) proto contains .proto file and its generted files
+
+
+Architecture detailed:
+Most of the stuff of architectuer is in internal/services file
+
+1) camera : It contains the main camera service which hanles camera CRUD . and lifecycle file which handles all other camera pipelines. cameras get created and pipeline is handelred and initialized from here.
+
+2) streamcapture : This is frist step of the pipeline ,It uses OpenCV and ffmpeg to read the RTSP stream . and pass the frame to the next step i.e. frameprocessing.
+
+3) frameprocessing : This is second step of the pipeline , It also uses OpenCV to draw the detection on the frame that are received from the GRPC request to the Ai server. it sends the frame & metadata to publisher and postprocessing.
+
+4) postprocessing : It takes this metadata and frame and determine wheater to send alert & supressions or not . and if yes it uses the messaging service for sending the alert & supressions in the NATS that will be received by different service..
+
+5) publisher : It takes this frames frm frameprocessing and publish it to the meadiamtx using ffmpeg and webrtc . from mediamtx it can be consumed easily.
+
+6) messaging : It contains the initialization and some things releted to the NATS.
+
+7) container.go : This file contains most of the services in a single container . not necessary but helpful.
+

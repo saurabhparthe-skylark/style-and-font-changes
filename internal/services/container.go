@@ -41,7 +41,7 @@ func NewServiceContainer(cfg *config.Config) (*ServiceContainer, error) {
 	}
 
 	// Initialize camera manager
-	cameraManager, err := camera.NewCameraManager(cfg, postProcessingSvc, publisherSvc)
+	cameraManager, err := camera.NewCameraManager(cfg, postProcessingSvc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize camera manager: %w", err)
 	}

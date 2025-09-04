@@ -256,9 +256,9 @@ func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*Med
 	go p.processMediaMTXFrames(stream)
 	go p.readIVFAndPublish(stream)
 
-	rtspURL := p.GetRTSPURL(cameraID)
-	webrtcURL := p.GetWebRTCURL(cameraID)
-	hlsURL := p.GetHLSURL(cameraID)
+	rtspURL := p.cfg.GetRTSPURL(cameraID)
+	webrtcURL := p.cfg.GetWebRTCURL(cameraID)
+	hlsURL := p.cfg.GetHLSURL(cameraID)
 
 	log.Info().
 		Str("camera_id", cameraID).
@@ -556,25 +556,25 @@ func (p *Publisher) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (p *Publisher) GetStreamURL(cameraID string) string {
-	return fmt.Sprintf("%s/live/%s", p.cfg.MediaMTXURL, cameraID)
-}
+// func (p *Publisher) GetStreamURL(cameraID string) string {
+// 	return fmt.Sprintf("%s/live/%s", p.cfg.MediaMTXURL, cameraID)
+// }
 
-func (p *Publisher) GetWebRTCURL(cameraID string) string {
-	return fmt.Sprintf("%s/live/%s/whep", p.cfg.MediaMTXURL, cameraID)
-}
+// func (p *Publisher) GetWebRTCURL(cameraID string) string {
+// 	return fmt.Sprintf("%s/live/%s/whep", p.cfg.MediaMTXURL, cameraID)
+// }
 
-func (p *Publisher) GetWebRTCPublishURL(cameraID string) string {
-	return fmt.Sprintf("%s/live/%s/whip", p.cfg.MediaMTXURL, cameraID)
-}
+// func (p *Publisher) GetWebRTCPublishURL(cameraID string) string {
+// 	return fmt.Sprintf("%s/live/%s/whip", p.cfg.MediaMTXURL, cameraID)
+// }
 
-func (p *Publisher) GetHLSURL(cameraID string) string {
-	return fmt.Sprintf("%s/live/%s/hls", p.cfg.MediaMTXURL, cameraID)
-}
+// func (p *Publisher) GetHLSURL(cameraID string) string {
+// 	return fmt.Sprintf("%s/live/%s/hls", p.cfg.MediaMTXURL, cameraID)
+// }
 
-func (p *Publisher) GetRTSPURL(cameraID string) string {
-	return fmt.Sprintf("rtsp://localhost:8554/live/%s", cameraID)
-}
+// func (p *Publisher) GetRTSPURL(cameraID string) string {
+// 	return fmt.Sprintf("rtsp://localhost:8554/live/%s", cameraID)
+// }
 
 // cleanupMediaMTXSessions attempts to remove any existing WebRTC sessions or publishers
 // for a given camera path to avoid WHIP/WHEP conflicts. It's best-effort and never fatal.

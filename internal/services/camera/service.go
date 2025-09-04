@@ -12,7 +12,6 @@ import (
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
 	"kepler-worker-go/internal/services/postprocessing"
-	"kepler-worker-go/internal/services/publisher"
 	"kepler-worker-go/internal/services/streamcapture"
 )
 
@@ -28,20 +27,16 @@ type CameraManager struct {
 	stopChannel  chan struct{}
 	watchdogOnce sync.Once
 
-	// Shared publisher for URL generation (stateless)
-	sharedPublisher *publisher.Service
-
 	// Post-processing service (for alerts)
 	postProcessingService *postprocessing.Service
 }
 
 // NewCameraManager creates a new camera manager with complete per-camera resource isolation
-func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service, publisherSvc *publisher.Service) (*CameraManager, error) {
+func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Service) (*CameraManager, error) {
 	cm := &CameraManager{
 		cfg:                   cfg,
 		cameras:               make(map[string]*CameraLifecycle),
 		stopChannel:           make(chan struct{}),
-		sharedPublisher:       publisherSvc, // Only for URL generation
 		postProcessingService: postProcessingSvc,
 	}
 
@@ -135,10 +130,10 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		AIFrameCounter:   0,
 
 		// Generate MediaMTX URLs using shared publisher service
-		RTSPUrl:   cm.sharedPublisher.GetRTSPURL(req.CameraID),
-		WebRTCUrl: cm.sharedPublisher.GetWebRTCURL(req.CameraID),
-		HLSUrl:    cm.sharedPublisher.GetHLSURL(req.CameraID),
-		MJPEGUrl:  fmt.Sprintf("http://localhost:%d/mjpeg/%s", cm.cfg.Port, req.CameraID),
+		RTSPUrl:   cm.cfg.GetRTSPURL(req.CameraID),
+		WebRTCUrl: cm.cfg.GetWebRTCURL(req.CameraID),
+		HLSUrl:    cm.cfg.GetHLSURL(req.CameraID),
+		MJPEGUrl:  cm.cfg.GetMJPEGURL(req.CameraID),
 	}
 
 	// Create lifecycle manager with completely isolated resources

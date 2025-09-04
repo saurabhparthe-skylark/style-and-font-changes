@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -24,10 +25,11 @@ type Config struct {
 	LogdyPort    int
 
 	// External Services
-	MediaMTXURL    string
-	MediaMTXAPIURL string
-	BackendURL     string
-	AIGRPCURL      string
+	MediaMTXURL     string
+	MediaMTXRTSPURL string
+	MediaMTXAPIURL  string
+	BackendURL      string
+	AIGRPCURL       string
 
 	// NATS (for messaging and alerts)
 	// Default: nats://localhost:4222 (works with Docker Compose setup)
@@ -164,10 +166,11 @@ func Load() *Config {
 		LogdyPort:    getEnvInt("LOGDY_PORT", 8080),
 
 		// External Services
-		MediaMTXURL:    getEnv("MEDIAMTX_URL", "http://localhost:8889"),
-		MediaMTXAPIURL: getEnv("MEDIAMTX_API_URL", "http://localhost:9997"),
-		BackendURL:     getEnv("BACKEND_URL", "http://localhost:8500"),
-		AIGRPCURL:      getEnv("AI_GRPC_URL", "192.168.1.76:50052"),
+		MediaMTXURL:     getEnv("MEDIAMTX_URL", "http://localhost:8889"),
+		MediaMTXRTSPURL: getEnv("MEDIAMTX_RTSP_URL", "rtsp://localhost:8554"),
+		MediaMTXAPIURL:  getEnv("MEDIAMTX_API_URL", "http://localhost:9997"),
+		BackendURL:      getEnv("BACKEND_URL", "http://localhost:8500"),
+		AIGRPCURL:       getEnv("AI_GRPC_URL", "192.168.1.76:50052"),
 
 		// NATS (configured for Docker Compose setup)
 		NatsURL:            getNatsURL(),
@@ -335,4 +338,20 @@ func getNatsURL() string {
 	}
 
 	return "nats://localhost:4222"
+}
+
+func (c *Config) GetRTSPURL(cameraID string) string {
+	return fmt.Sprintf("%s/live/%s", c.MediaMTXRTSPURL, cameraID)
+}
+
+func (c *Config) GetWebRTCURL(cameraID string) string {
+	return fmt.Sprintf("%s/live/%s/whep", c.MediaMTXURL, cameraID)
+}
+
+func (c *Config) GetHLSURL(cameraID string) string {
+	return fmt.Sprintf("%s/live/%s/hls", c.MediaMTXURL, cameraID)
+}
+
+func (c *Config) GetMJPEGURL(cameraID string) string {
+	return fmt.Sprintf("http://localhost:%d/mjpeg/%s", c.Port, cameraID)
 }

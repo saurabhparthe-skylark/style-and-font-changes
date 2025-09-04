@@ -53,23 +53,3 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	s.mjpegPublisher.Shutdown()
 	return s.webrtcPublisher.Shutdown(ctx)
 }
-
-func (s *Service) GetStreamURL(cameraID string) string {
-	return s.webrtcPublisher.GetStreamURL(cameraID)
-}
-
-func (s *Service) GetWebRTCURL(cameraID string) string {
-	return s.webrtcPublisher.GetWebRTCURL(cameraID)
-}
-
-func (s *Service) GetWebRTCPublishURL(cameraID string) string {
-	return s.webrtcPublisher.GetWebRTCPublishURL(cameraID)
-}
-
-func (s *Service) GetHLSURL(cameraID string) string {
-	return s.webrtcPublisher.GetHLSURL(cameraID)
-}
-
-func (s *Service) GetRTSPURL(cameraID string) string {
-	return s.webrtcPublisher.GetRTSPURL(cameraID)
-}
