@@ -27,7 +27,7 @@ func HandleAnomalyDetection(detection models.Detection, decision models.AlertDec
 }
 
 // BuildAnomalyAlert creates a complete anomaly alert payload with images
-func BuildAnomalyAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildAnomalyAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 
 	// Create alert decision
 	decision := models.AlertDecision{
@@ -68,10 +68,10 @@ func BuildAnomalyAlert(detection models.Detection, cameraID string, frame []byte
 	}
 
 	// Add context image using helper
-	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "anomaly alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, detection.TrackID, "anomaly alert")
 
 	// Add detection image using helper with anomaly-specific metadata
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("anomaly_alert_%d", detection.TrackID), map[string]interface{}{
+	helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID, fmt.Sprintf("anomaly_alert_%d", detection.TrackID), map[string]interface{}{
 		"alert_type":             decision.AlertType,
 		"anomaly_label":          detection.Label,
 		"detection_method":       "anomaly_detection",

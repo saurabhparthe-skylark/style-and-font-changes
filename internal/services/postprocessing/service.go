@@ -93,7 +93,7 @@ func (s *Service) ProcessDetections(cameraID string, detections []models.Detecti
 			}
 
 			if s.CheckCooldown(suppressionKey, "suppression") {
-				s.processSuppressionDirectly(det, suppressionDecision, cameraID, rawFrameData, frameMetadata)
+				s.processSuppression(det, suppressionDecision, cameraID, rawFrameData, frameMetadata)
 				s.UpdateCooldown(suppressionKey, "suppression")
 				result.SuppressedDetections++
 			} else {
@@ -428,8 +428,8 @@ func (s *Service) getDetectionLevelsSummary(detections []models.Detection) map[s
 	return summary
 }
 
-// processSuppressionDirectly processes a suppression immediately without workers
-func (s *Service) processSuppressionDirectly(detection models.Detection, decision models.SuppressionDecision, cameraID string, rawFrameData []byte, frameMetadata models.FrameMetadata) error {
+// processSuppression processes a suppression immediately without workers
+func (s *Service) processSuppression(detection models.Detection, decision models.SuppressionDecision, cameraID string, rawFrameData []byte, frameMetadata models.FrameMetadata) error {
 	start := time.Now()
 
 	// Use specialized build functions based on suppression type
@@ -598,21 +598,21 @@ func (s *Service) processSingleAlert(detection models.Detection, decision models
 	var payload models.AlertPayload
 	switch decision.AlertType {
 	case models.AlertTypePPEViolation:
-		payload = alerts.BuildPPEAlert(detection, cameraID, rawFrameData)
+		payload = alerts.BuildPPEAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	case models.AlertTypeDroneDetection:
-		payload = alerts.BuildDroneAlert(detection, cameraID, rawFrameData)
+		payload = alerts.BuildDroneAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	case models.AlertTypeVehicleDetection:
 		payload = alerts.BuildVehicleAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	case models.AlertTypeFireSmoke:
 		payload = alerts.BuildFireSmokeAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	case models.AlertTypeAnomalyDetection:
-		payload = alerts.BuildAnomalyAlert(detection, cameraID, rawFrameData)
+		payload = alerts.BuildAnomalyAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	case models.AlertTypeSelfLearned:
-		payload = alerts.BuildSelfLearningAlert(detection, cameraID, rawFrameData)
-	case models.AlertTypePersonDetection, models.AlertTypeIntrusionDetection:
-		payload = alerts.BuildPersonAlert(detection, cameraID, rawFrameData)
+		payload = alerts.BuildSelfLearningAlert(detection, cameraID, rawFrameData, annotatedFrameData)
+	case models.AlertTypePersonDetection:
+		payload = alerts.BuildPersonAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	default:
-		payload = alerts.BuildGeneralAlert(detection, cameraID, rawFrameData)
+		payload = alerts.BuildGeneralAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	}
 
 	// Add processing metadata

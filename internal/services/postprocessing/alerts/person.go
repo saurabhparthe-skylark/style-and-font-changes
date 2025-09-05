@@ -38,7 +38,7 @@ func HandlePersonDetection(detection models.Detection, decision models.AlertDeci
 }
 
 // BuildPersonAlert creates a complete person alert payload with images
-func BuildPersonAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildPersonAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 
 	// Create alert decision
 	decision := models.AlertDecision{
@@ -86,10 +86,10 @@ func BuildPersonAlert(detection models.Detection, cameraID string, frame []byte)
 	}
 
 	// Add context image using helper
-	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "person alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, detection.TrackID, "person alert")
 
 	// Add detection image using helper with person-specific metadata (using raw frame)
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("person_alert_%d", detection.TrackID), map[string]interface{}{
+	helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID, fmt.Sprintf("person_alert_%d", detection.TrackID), map[string]interface{}{
 		"alert_type":      decision.AlertType,
 		"detection_label": detection.Label,
 		"send_alert_flag": detection.SendAlert,

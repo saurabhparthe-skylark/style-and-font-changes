@@ -41,6 +41,14 @@ func (s *Service) PublishFrame(frame *models.ProcessedFrame) error {
 	return s.webrtcPublisher.PublishFrame(frame)
 }
 
+// RegisterCameraSource registers the RTSP source URL for a given camera so that
+// the WebRTC publisher can extract and publish audio alongside video.
+func (s *Service) RegisterCameraSource(cameraID, rtspURL string) {
+	if s.webrtcPublisher != nil {
+		s.webrtcPublisher.RegisterCameraSource(cameraID, rtspURL)
+	}
+}
+
 func (s *Service) StreamMJPEGHTTP(w http.ResponseWriter, r *http.Request, cameraID string) {
 	s.mjpegPublisher.StreamMJPEGHTTP(w, r, cameraID)
 }

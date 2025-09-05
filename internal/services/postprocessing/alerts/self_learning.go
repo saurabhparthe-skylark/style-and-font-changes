@@ -28,7 +28,7 @@ func HandleSelfLearningDetection(detection models.Detection, decision models.Ale
 }
 
 // BuildSelfLearningAlert creates a complete self-learning alert payload with images
-func BuildSelfLearningAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildSelfLearningAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 
 	// Create alert decision
 	decision := models.AlertDecision{
@@ -70,10 +70,10 @@ func BuildSelfLearningAlert(detection models.Detection, cameraID string, frame [
 	}
 
 	// Add context image using helper
-	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "self-learning alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, detection.TrackID, "self-learning alert")
 
 	// Add detection image using helper with self-learning specific metadata
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("self_learning_alert_%d", detection.TrackID), map[string]interface{}{
+	helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID, fmt.Sprintf("self_learning_alert_%d", detection.TrackID), map[string]interface{}{
 		"alert_type":         decision.AlertType,
 		"self_learned_label": detection.Label,
 		"detection_method":   "self_learning",

@@ -25,23 +25,33 @@ type Publisher struct {
 	cfg *config.Config
 
 	streamMutex sync.RWMutex
-	streams     map[string]*MediaMTXStream
+	streams     map[string]*Stream
+
+	sourceMutex  sync.RWMutex
+	cameraSource map[string]string
 }
 
-type MediaMTXStream struct {
-	cameraID    string
-	process     *exec.Cmd
-	stdin       io.WriteCloser
-	stdout      io.ReadCloser
-	frameBuffer chan *models.ProcessedFrame
-	isRunning   bool
-	stopChannel chan struct{}
+type Stream struct {
+	cameraID     string
+	videoProcess *exec.Cmd
+	videoIn      io.WriteCloser
+	videoOut     io.ReadCloser
+	frameBuffer  chan *models.ProcessedFrame
+	isRunning    bool
+	stopCh       chan struct{}
 
 	whipURL      string
 	whipClient   *http.Client
 	whipResource string
 	pc           *webrtc.PeerConnection
 	videoTrack   *webrtc.TrackLocalStaticSample
+
+	// Audio
+	audioProcess  *exec.Cmd
+	audioOut      io.ReadCloser
+	audioTrack    *webrtc.TrackLocalStaticSample
+	audioStopChan chan struct{}
+	audioRunning  bool
 
 	targetFPS     float64
 	frameInterval time.Duration
@@ -52,8 +62,9 @@ type MediaMTXStream struct {
 
 func NewPublisher(cfg *config.Config) (*Publisher, error) {
 	publisher := &Publisher{
-		cfg:     cfg,
-		streams: make(map[string]*MediaMTXStream),
+		cfg:          cfg,
+		streams:      make(map[string]*Stream),
+		cameraSource: make(map[string]string),
 	}
 	log.Info().
 		Str("mediamtx_url", cfg.MediaMTXURL).
@@ -62,7 +73,7 @@ func NewPublisher(cfg *config.Config) (*Publisher, error) {
 }
 
 func (p *Publisher) PublishFrame(frame *models.ProcessedFrame) error {
-	stream, err := p.getOrCreateMediaMTXStream(frame.CameraID, frame.Width, frame.Height)
+	stream, err := p.getOrCreateStream(frame.CameraID, frame.Width, frame.Height)
 	if err != nil {
 		return fmt.Errorf("failed to get MediaMTX stream for camera %s: %w", frame.CameraID, err)
 	}
@@ -80,7 +91,7 @@ func (p *Publisher) PublishFrame(frame *models.ProcessedFrame) error {
 	return nil
 }
 
-func (p *Publisher) getOrCreateMediaMTXStream(cameraID string, width, height int) (*MediaMTXStream, error) {
+func (p *Publisher) getOrCreateStream(cameraID string, width, height int) (*Stream, error) {
 	p.streamMutex.Lock()
 	defer p.streamMutex.Unlock()
 
@@ -88,7 +99,7 @@ func (p *Publisher) getOrCreateMediaMTXStream(cameraID string, width, height int
 		return stream, nil
 	}
 
-	stream, err := p.createWebRTCStream(cameraID, width, height)
+	stream, err := p.createStream(cameraID, width, height)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +108,14 @@ func (p *Publisher) getOrCreateMediaMTXStream(cameraID string, width, height int
 	return stream, nil
 }
 
-func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*MediaMTXStream, error) {
+// RegisterCameraSource stores the RTSP URL for audio extraction
+func (p *Publisher) RegisterCameraSource(cameraID, rtspURL string) {
+	p.sourceMutex.Lock()
+	p.cameraSource[cameraID] = rtspURL
+	p.sourceMutex.Unlock()
+}
+
+func (p *Publisher) createStream(cameraID string, width, height int) (*Stream, error) {
 	whipURL := fmt.Sprintf("%s/live/%s/whip", p.cfg.MediaMTXURL, cameraID)
 
 	// best-effort cleanup of any lingering WebRTC sessions or publishers on this path
@@ -124,6 +142,17 @@ func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*Med
 	if _, err := pc.AddTrack(videoTrack); err != nil {
 		pc.Close()
 		return nil, fmt.Errorf("failed to add video track: %w", err)
+	}
+
+	// Add audio track (PCMU G.711 at 8kHz)
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU}, "audio", cameraID)
+	if err == nil {
+		if _, err2 := pc.AddTrack(audioTrack); err2 != nil {
+			log.Warn().Err(err2).Str("camera_id", cameraID).Msg("Failed to add audio track; continuing without audio")
+			audioTrack = nil
+		}
+	} else {
+		log.Warn().Err(err).Str("camera_id", cameraID).Msg("Failed to create audio track; continuing without audio")
 	}
 
 	offer, err := pc.CreateOffer(nil)
@@ -189,6 +218,7 @@ func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*Med
 	}
 	whipResource := resp.Header.Get("Location")
 
+	// Video encoder
 	sizeArg := fmt.Sprintf("%dx%d", p.cfg.OutputWidth, p.cfg.OutputHeight)
 	fps := p.cfg.PublishingFPS
 	if fps <= 0 {
@@ -235,14 +265,14 @@ func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*Med
 	targetFPS := float64(fps)
 	frameInterval := time.Duration(float64(time.Second) / targetFPS)
 
-	stream := &MediaMTXStream{
+	stream := &Stream{
 		cameraID:      cameraID,
-		process:       process,
-		stdin:         stdin,
-		stdout:        stdout,
+		videoProcess:  process,
+		videoIn:       stdin,
+		videoOut:      stdout,
 		frameBuffer:   make(chan *models.ProcessedFrame, 1),
 		isRunning:     true,
-		stopChannel:   make(chan struct{}),
+		stopCh:        make(chan struct{}),
 		whipURL:       whipURL,
 		whipClient:    whipClient,
 		whipResource:  whipResource,
@@ -253,8 +283,26 @@ func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*Med
 		lastFrameTime: time.Now(),
 	}
 
-	go p.processMediaMTXFrames(stream)
-	go p.readIVFAndPublish(stream)
+	go p.pumpVideoFramesToEncoder(stream)
+	go p.pumpEncodedVideoToTrack(stream)
+
+	// Start audio extraction via FFmpeg if we have a source URL and track
+	if audioTrack != nil {
+		p.sourceMutex.RLock()
+		rtspURL := p.cameraSource[cameraID]
+		p.sourceMutex.RUnlock()
+		if rtspURL == "" {
+			// fallback to configured path if present
+			rtspURL = p.cfg.GetRTSPURL(cameraID)
+		}
+		if rtspURL != "" {
+			stream.audioTrack = audioTrack
+			stream.audioStopChan = make(chan struct{})
+			if err := p.startAudioPipeline(stream, rtspURL); err != nil {
+				log.Warn().Err(err).Str("camera_id", cameraID).Msg("Audio pipeline failed to start; continuing without audio")
+			}
+		}
+	}
 
 	rtspURL := p.cfg.GetRTSPURL(cameraID)
 	webrtcURL := p.cfg.GetWebRTCURL(cameraID)
@@ -272,7 +320,70 @@ func (p *Publisher) createWebRTCStream(cameraID string, width, height int) (*Med
 	return stream, nil
 }
 
-func (p *Publisher) processMediaMTXFrames(stream *MediaMTXStream) {
+// startAudioPipeline runs ffmpeg to extract/encode G.711 PCMU at 8kHz and sends 20ms samples
+func (p *Publisher) startAudioPipeline(stream *Stream, rtspURL string) error {
+	// Transcode to 8kHz mono mulaw (PCMU) and pipe raw mulaw bytes
+	args := []string{
+		"-rtsp_transport", "tcp",
+		"-i", rtspURL,
+		"-vn",
+		"-ac", "1",
+		"-ar", "8000",
+		"-c:a", "pcm_mulaw",
+		"-f", "mulaw",
+		"-loglevel", "error",
+		"pipe:1",
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	stream.audioProcess = cmd
+	stream.audioOut = stdout
+	stream.audioRunning = true
+
+	go func() {
+		defer func() {
+			stream.audioRunning = false
+			if stream.audioOut != nil {
+				stream.audioOut.Close()
+			}
+			if stream.audioProcess != nil {
+				stream.audioProcess.Wait()
+			}
+		}()
+
+		reader := bufio.NewReader(stdout)
+		// 20ms of 8kHz mono mulaw = 8000 * 1 byte * 0.02 = 160 bytes per chunk
+		chunkBytes := 160
+		buf := make([]byte, chunkBytes)
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+
+		for stream.isRunning && stream.audioRunning && stream.audioTrack != nil {
+			select {
+			case <-stream.audioStopChan:
+				return
+			case <-ticker.C:
+				_, err := io.ReadFull(reader, buf)
+				if err != nil {
+					// On underrun, fill with mulaw silence (0xFF)
+					for i := range buf {
+						buf[i] = 0xFF
+					}
+				}
+				_ = stream.audioTrack.WriteSample(media.Sample{Data: append([]byte(nil), buf...), Duration: 20 * time.Millisecond})
+			}
+		}
+	}()
+	return nil
+}
+
+func (p *Publisher) pumpVideoFramesToEncoder(stream *Stream) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Error().
@@ -282,11 +393,11 @@ func (p *Publisher) processMediaMTXFrames(stream *MediaMTXStream) {
 		}
 
 		stream.isRunning = false
-		if stream.stdin != nil {
-			stream.stdin.Close()
+		if stream.videoIn != nil {
+			stream.videoIn.Close()
 		}
-		if stream.process != nil {
-			stream.process.Wait()
+		if stream.videoProcess != nil {
+			stream.videoProcess.Wait()
 		}
 
 		if stream.pc != nil {
@@ -313,7 +424,7 @@ func (p *Publisher) processMediaMTXFrames(stream *MediaMTXStream) {
 
 	for stream.isRunning {
 		select {
-		case <-stream.stopChannel:
+		case <-stream.stopCh:
 			return
 		case <-ticker.C:
 			var latestFrame *models.ProcessedFrame
@@ -361,8 +472,6 @@ func (p *Publisher) processMediaMTXFrames(stream *MediaMTXStream) {
 				continue
 			}
 
-			// Remove artificial age limits - let natural frame draining handle realtime behavior
-
 			resizedData, err := p.resizeFrameToStandard(latestFrame.Data, latestFrame.Width, latestFrame.Height)
 			if err != nil {
 				log.Error().
@@ -372,7 +481,7 @@ func (p *Publisher) processMediaMTXFrames(stream *MediaMTXStream) {
 				continue
 			}
 
-			if _, err := stream.stdin.Write(resizedData); err != nil {
+			if _, err := stream.videoIn.Write(resizedData); err != nil {
 				log.Error().
 					Err(err).
 					Str("camera_id", stream.cameraID).
@@ -385,12 +494,12 @@ func (p *Publisher) processMediaMTXFrames(stream *MediaMTXStream) {
 	}
 }
 
-func (p *Publisher) readIVFAndPublish(stream *MediaMTXStream) {
-	if stream.stdout == nil || stream.videoTrack == nil {
+func (p *Publisher) pumpEncodedVideoToTrack(stream *Stream) {
+	if stream.videoOut == nil || stream.videoTrack == nil {
 		return
 	}
 
-	reader := bufio.NewReader(stream.stdout)
+	reader := bufio.NewReader(stream.videoOut)
 
 	header := make([]byte, 32)
 	if _, err := io.ReadFull(reader, header); err != nil {
@@ -489,19 +598,30 @@ func (p *Publisher) StopStream(cameraID string) error {
 	}
 
 	stream.isRunning = false
-	close(stream.stopChannel)
+	close(stream.stopCh)
 	close(stream.frameBuffer)
 
-	if stream.stdin != nil {
-		stream.stdin.Close()
+	if stream.videoIn != nil {
+		stream.videoIn.Close()
 	}
 
-	if stream.process != nil {
-		stream.process.Wait()
+	if stream.videoProcess != nil {
+		stream.videoProcess.Wait()
 	}
 
-	if stream.stdout != nil {
-		stream.stdout.Close()
+	if stream.videoOut != nil {
+		stream.videoOut.Close()
+	}
+
+	// Audio cleanup
+	if stream.audioStopChan != nil {
+		close(stream.audioStopChan)
+	}
+	if stream.audioOut != nil {
+		stream.audioOut.Close()
+	}
+	if stream.audioProcess != nil {
+		stream.audioProcess.Wait()
 	}
 
 	if stream.pc != nil {
@@ -530,18 +650,29 @@ func (p *Publisher) Shutdown(ctx context.Context) error {
 
 	for cameraID, stream := range p.streams {
 		stream.isRunning = false
-		close(stream.stopChannel)
+		close(stream.stopCh)
 		close(stream.frameBuffer)
 
-		if stream.stdin != nil {
-			stream.stdin.Close()
+		if stream.videoIn != nil {
+			stream.videoIn.Close()
 		}
 
-		if stream.process != nil {
-			stream.process.Wait()
+		if stream.videoProcess != nil {
+			stream.videoProcess.Wait()
 		}
-		if stream.stdout != nil {
-			stream.stdout.Close()
+		if stream.videoOut != nil {
+			stream.videoOut.Close()
+		}
+
+		// Audio cleanup
+		if stream.audioStopChan != nil {
+			close(stream.audioStopChan)
+		}
+		if stream.audioOut != nil {
+			stream.audioOut.Close()
+		}
+		if stream.audioProcess != nil {
+			stream.audioProcess.Wait()
 		}
 
 		log.Info().
@@ -551,32 +682,11 @@ func (p *Publisher) Shutdown(ctx context.Context) error {
 			Msg("WebRTC stream stopped during shutdown")
 	}
 
-	p.streams = make(map[string]*MediaMTXStream)
+	p.streams = make(map[string]*Stream)
 
 	return nil
 }
 
-// func (p *Publisher) GetStreamURL(cameraID string) string {
-// 	return fmt.Sprintf("%s/live/%s", p.cfg.MediaMTXURL, cameraID)
-// }
-
-// func (p *Publisher) GetWebRTCURL(cameraID string) string {
-// 	return fmt.Sprintf("%s/live/%s/whep", p.cfg.MediaMTXURL, cameraID)
-// }
-
-// func (p *Publisher) GetWebRTCPublishURL(cameraID string) string {
-// 	return fmt.Sprintf("%s/live/%s/whip", p.cfg.MediaMTXURL, cameraID)
-// }
-
-// func (p *Publisher) GetHLSURL(cameraID string) string {
-// 	return fmt.Sprintf("%s/live/%s/hls", p.cfg.MediaMTXURL, cameraID)
-// }
-
-// func (p *Publisher) GetRTSPURL(cameraID string) string {
-// 	return fmt.Sprintf("rtsp://localhost:8554/live/%s", cameraID)
-// }
-
-// cleanupMediaMTXSessions attempts to remove any existing WebRTC sessions or publishers
 // for a given camera path to avoid WHIP/WHEP conflicts. It's best-effort and never fatal.
 func (p *Publisher) cleanupMediaMTXSessions(cameraID string) error {
 	apiBase := p.cfg.MediaMTXAPIURL

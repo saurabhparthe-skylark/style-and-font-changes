@@ -74,7 +74,7 @@ func HandlePPEDetection(detection models.Detection, decision models.AlertDecisio
 }
 
 // BuildPPEAlert creates a complete PPE alert payload with images
-func BuildPPEAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildPPEAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 
 	// Create alert decision first
 	decision := models.AlertDecision{
@@ -116,10 +116,10 @@ func BuildPPEAlert(detection models.Detection, cameraID string, frame []byte) mo
 	}
 
 	// Add context image using helper
-	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "PPE alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, detection.TrackID, "PPE alert")
 
 	// Add detection image using helper with PPE-specific metadata
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("ppe_alert_%d", detection.TrackID), map[string]interface{}{
+	helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID, fmt.Sprintf("ppe_alert_%d", detection.TrackID), map[string]interface{}{
 		"alert_type": decision.AlertType,
 		"violations": detection.Violations,
 	})

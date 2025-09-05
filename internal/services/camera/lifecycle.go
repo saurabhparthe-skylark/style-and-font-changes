@@ -315,6 +315,11 @@ func (cl *CameraLifecycle) runCamera() {
 		return
 	}
 
+	// Register RTSP source for audio with publisher
+	if pub := cl.getPublisherService(); pub != nil {
+		pub.RegisterCameraSource(cl.camera.ID, cl.camera.URL)
+	}
+
 	for cl.isRunning() {
 		select {
 		case <-cl.ctx.Done():

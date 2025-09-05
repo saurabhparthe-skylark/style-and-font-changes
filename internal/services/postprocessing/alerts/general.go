@@ -28,7 +28,7 @@ func HandleGeneralDetection(detection models.Detection, decision models.AlertDec
 }
 
 // BuildGeneralAlert creates a complete general alert payload with images
-func BuildGeneralAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildGeneralAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 
 	// Create alert decision
 	decision := models.AlertDecision{
@@ -67,10 +67,10 @@ func BuildGeneralAlert(detection models.Detection, cameraID string, frame []byte
 	}
 
 	// Add context image using helper
-	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "general alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, detection.TrackID, "general alert")
 
 	// Add detection image using helper with general-specific metadata (using raw frame)
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("general_alert_%d", detection.TrackID), map[string]interface{}{
+	helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID, fmt.Sprintf("general_alert_%d", detection.TrackID), map[string]interface{}{
 		"alert_type":      decision.AlertType,
 		"detection_label": detection.Label,
 		"send_alert_flag": detection.SendAlert,

@@ -23,7 +23,7 @@ func HandleDroneDetection(detection models.Detection, decision models.AlertDecis
 }
 
 // BuildDroneAlert creates a complete drone alert payload with images
-func BuildDroneAlert(detection models.Detection, cameraID string, frame []byte) models.AlertPayload {
+func BuildDroneAlert(detection models.Detection, cameraID string, rawFrame []byte, annotatedFrame []byte) models.AlertPayload {
 	log.Info().
 		Str("camera_id", cameraID).
 		Int32("track_id", detection.TrackID).
@@ -66,10 +66,10 @@ func BuildDroneAlert(detection models.Detection, cameraID string, frame []byte) 
 	}
 
 	// Add context image using helper
-	helpers.AddContextImage(&payload, frame, cameraID, detection.TrackID, "drone alert")
+	helpers.AddContextImage(&payload, annotatedFrame, cameraID, detection.TrackID, "drone alert")
 
 	// Add detection image using helper with drone-specific metadata
-	helpers.AddDetectionImage(&payload, detection, frame, cameraID, fmt.Sprintf("drone_alert_%d", detection.TrackID), map[string]interface{}{
+	helpers.AddDetectionImage(&payload, detection, rawFrame, cameraID, fmt.Sprintf("drone_alert_%d", detection.TrackID), map[string]interface{}{
 		"alert_type":         decision.AlertType,
 		"detection_subtype":  detection.Label,
 		"aerial_object_type": strings.ToLower(detection.Label),
