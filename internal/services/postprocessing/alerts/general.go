@@ -134,7 +134,7 @@ func BuildConsolidatedGeneralAlert(detections []models.Detection, cameraID strin
 	for i, detection := range detections {
 		frameForCrop := rawFrame
 		if detection.TrackID == primaryDetection.TrackID {
-			frameForCrop = annotatedFrame
+			frameForCrop = rawFrame
 		}
 		helpers.AddDetectionImage(&payload, detection, frameForCrop, cameraID,
 			fmt.Sprintf("general_consolidated_%d_%d", detection.TrackID, i),
