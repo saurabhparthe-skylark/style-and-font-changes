@@ -13,7 +13,7 @@ services:
       - PUBLISHING_FPS=30
       - NATS_URL=nats://172.17.0.1:4222
       - AI_GRPC_URL=49.248.155.76:50052
-      - MEDIAMTX_URL=http://192.168.29.190:8889
+      - MEDIAMTX_URL=http://localhost:8889
       - SHOW_METADATA=true
       - SHOW_CAMERA_ID=false
       - SHOW_FRAME_ID=false

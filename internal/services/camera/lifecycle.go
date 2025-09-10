@@ -134,7 +134,7 @@ func (cl *CameraLifecycle) createServices() error {
 		cl.frameProcessor, _ = frameprocessing.NewFrameProcessor(cl.cm.cfg)
 	}
 
-	// Create dedicated publisher service
+	// Create dedicated publisher service (per camera)
 	cl.publisherSvc, err = publisher.NewService(cl.cm.cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create publisher for camera %s: %w", cl.camera.ID, err)

@@ -304,13 +304,17 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 	}
 
 	y := 30
-	// log.Info().Msgf("AI response: %v", solutionsMap)
-	// log.Info().Msgf("Projects: %v", projects)
 	for _, project := range projects {
 		switch project {
 		case "person_detection_lr":
-			//we get prople counter in person_derection_sr
+			// we get prople counter in person_derection_sr
 			if solution, exists := solutionsMap["people_counter"]; exists {
+				solutions.DrawPeopleCounter(mat, solution, &y)
+			}
+		case "drone_person_counter":
+			// case "unified_drone":
+			if solution, exists := solutionsMap["drone_person_counter"]; exists {
+				log.Info().Msgf("Drone person counter: %v", solution)
 				solutions.DrawPeopleCounter(mat, solution, &y)
 			}
 			// if solution, exists := solutionsMap["intrusion_detection"]; exists {
@@ -453,11 +457,13 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 
 	// Call AI service safely with timeout
 	// sanitizedID := sanitizeCameraID(rawFrame.CameraID)
+	// req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: []string{"unified_drone"}}
 	req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: projects}
 
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
+	// log.Info().Msgf("AI request: %v %v", req.ProjectNames, req.CameraId)
 	resp, err := fp.grpcClient.InferDetection(ctx, req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("AI service call failed: %v", err)
@@ -468,6 +474,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 			Msg("AI gRPC call failed (stream continues)")
 		return result
 	}
+	// log.Info().Msgf("AI response: %v", resp.GetResults())
 
 	// for projectName, project := range resp.Results {
 	// 	if project == nil || project.Solutions == nil {

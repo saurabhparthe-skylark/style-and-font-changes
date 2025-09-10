@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/pion/webrtc/v4"
@@ -245,6 +246,7 @@ func (p *Publisher) createStream(cameraID string, width, height int) (*Stream, e
 		"pipe:1",
 	}
 	process := exec.Command("ffmpeg", args...)
+	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdin, err := process.StdinPipe()
 	if err != nil {
 		pc.Close()
@@ -324,7 +326,12 @@ func (p *Publisher) createStream(cameraID string, width, height int) (*Stream, e
 func (p *Publisher) startAudioPipeline(stream *Stream, rtspURL string) error {
 	// Transcode to 8kHz mono mulaw (PCMU) and pipe raw mulaw bytes
 	args := []string{
-		"-rtsp_transport", "tcp",
+		"-rtsp_transport", "udp",
+		"-fflags", "nobuffer+genpts",
+		"-probesize", "32",
+		"-analyzeduration", "0",
+		"-rtbufsize", "2000k",
+		"-max_delay", "2000000",
 		"-i", rtspURL,
 		"-vn",
 		"-ac", "1",
@@ -334,7 +341,9 @@ func (p *Publisher) startAudioPipeline(stream *Stream, rtspURL string) error {
 		"-loglevel", "error",
 		"pipe:1",
 	}
+
 	cmd := exec.Command("ffmpeg", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -353,7 +362,7 @@ func (p *Publisher) startAudioPipeline(stream *Stream, rtspURL string) error {
 				stream.audioOut.Close()
 			}
 			if stream.audioProcess != nil {
-				stream.audioProcess.Wait()
+				_ = terminateProcess(stream.audioProcess)
 			}
 		}()
 
@@ -397,7 +406,7 @@ func (p *Publisher) pumpVideoFramesToEncoder(stream *Stream) {
 			stream.videoIn.Close()
 		}
 		if stream.videoProcess != nil {
-			stream.videoProcess.Wait()
+			_ = terminateProcess(stream.videoProcess)
 		}
 
 		if stream.pc != nil {
@@ -409,7 +418,9 @@ func (p *Publisher) pumpVideoFramesToEncoder(stream *Stream) {
 		}
 
 		p.streamMutex.Lock()
-		delete(p.streams, stream.cameraID)
+		if current, exists := p.streams[stream.cameraID]; exists && current == stream {
+			delete(p.streams, stream.cameraID)
+		}
 		p.streamMutex.Unlock()
 
 		log.Info().
@@ -606,7 +617,7 @@ func (p *Publisher) StopStream(cameraID string) error {
 	}
 
 	if stream.videoProcess != nil {
-		stream.videoProcess.Wait()
+		_ = terminateProcess(stream.videoProcess)
 	}
 
 	if stream.videoOut != nil {
@@ -621,7 +632,7 @@ func (p *Publisher) StopStream(cameraID string) error {
 		stream.audioOut.Close()
 	}
 	if stream.audioProcess != nil {
-		stream.audioProcess.Wait()
+		_ = terminateProcess(stream.audioProcess)
 	}
 
 	if stream.pc != nil {
@@ -658,7 +669,7 @@ func (p *Publisher) Shutdown(ctx context.Context) error {
 		}
 
 		if stream.videoProcess != nil {
-			stream.videoProcess.Wait()
+			_ = terminateProcess(stream.videoProcess)
 		}
 		if stream.videoOut != nil {
 			stream.videoOut.Close()
@@ -672,7 +683,7 @@ func (p *Publisher) Shutdown(ctx context.Context) error {
 			stream.audioOut.Close()
 		}
 		if stream.audioProcess != nil {
-			stream.audioProcess.Wait()
+			_ = terminateProcess(stream.audioProcess)
 		}
 
 		log.Info().
@@ -746,4 +757,23 @@ func (p *Publisher) cleanupMediaMTXSessions(cameraID string) error {
 		idx = pos + len(path)
 	}
 	return nil
+}
+
+// terminateProcess sends SIGTERM to the process group, waits briefly, then SIGKILLs if needed.
+func terminateProcess(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	// send SIGTERM to the whole group
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-time.After(2 * time.Second):
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return nil
+	case err := <-done:
+		return err
+	}
 }
