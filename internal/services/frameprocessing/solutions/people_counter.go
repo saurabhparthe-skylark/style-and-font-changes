@@ -10,31 +10,30 @@ import (
 	"gocv.io/x/gocv"
 )
 
-// DrawPeopleCounter draws people counting overlay with comprehensive stats
+// DrawPeopleCounter draws people counting overlay with beautiful design
 func DrawPeopleCounter(mat *gocv.Mat, solution models.SolutionResults, y *int) {
 	if mat == nil {
 		return
 	}
 
-	// Main current count with larger text
-	currentText := fmt.Sprintf("Current: %d", solution.CurrentCount)
-	DrawTextEnhanced(mat, currentText, 15, *y, color.RGBA{R: 0, G: 255, B: 255, A: 255}, 0.8, 2)
+	// Title header with beautiful styling
+	headerText := "PEOPLE COUNTER"
+	DrawTextEnhanced(mat, headerText, 15, *y, color.RGBA{R: 0, G: 255, B: 255, A: 255}, 0.8, 2)
 	*y += 35
 
-	// Max count
-	maxText := fmt.Sprintf("Peak: %d", solution.MaxCount)
-	DrawText(mat, maxText, 15, *y, color.RGBA{R: 255, G: 215, B: 0, A: 255})
-	*y += 35
+	// Current count with enhanced styling and icon-like prefix
+	currentText := fmt.Sprintf("Current: %d", solution.PeopleCurrentCount)
+	currentColor := getPeopleCountColor(solution.PeopleCurrentCount)
+	DrawTextEnhanced(mat, currentText, 15, *y, currentColor, 0.75, 2)
+	*y += 32
 
-	// Total count
-	// totalText := fmt.Sprintf("Total: %d", solution.TotalCount)
-	// DrawText(mat, totalText, 15, *y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
-	// *y += 35
+	// Peak count with golden color
+	maxText := fmt.Sprintf("Peak: %d", solution.PeopleMaxCount)
+	DrawTextEnhanced(mat, maxText, 15, *y, color.RGBA{R: 255, G: 215, B: 0, A: 255}, 0.7, 2)
+	*y += 30
 
-	// Out region count if applicable
-	// outText := fmt.Sprintf("Exited: %d", solution.OutRegionCount)
-	// DrawText(mat, outText, 15, *y, color.RGBA{R: 255, G: 165, B: 0, A: 255})
-	// *y += 35
+	// Add some spacing after people counter
+	*y += 10
 }
 
 // DrawText helper function to draw text with background
@@ -63,4 +62,20 @@ func DrawTextEnhanced(mat *gocv.Mat, text string, x, y int, textColor color.RGBA
 	shadowColor := color.RGBA{R: 0, G: 0, B: 0, A: 100}
 	gocv.PutText(mat, text, image.Pt(x+1, y+1), fontFace, fontScale, shadowColor, thickness)
 	gocv.PutText(mat, text, image.Pt(x, y), fontFace, fontScale, textColor, thickness)
+}
+
+// getPeopleCountColor returns dynamic color based on people count
+func getPeopleCountColor(count int32) color.RGBA {
+	switch {
+	case count == 0:
+		return color.RGBA{R: 128, G: 128, B: 128, A: 255} // Gray for no people
+	case count <= 5:
+		return color.RGBA{R: 0, G: 255, B: 0, A: 255} // Green for low count
+	case count <= 15:
+		return color.RGBA{R: 0, G: 255, B: 255, A: 255} // Cyan for medium count
+	case count <= 25:
+		return color.RGBA{R: 255, G: 165, B: 0, A: 255} // Orange for high count
+	default:
+		return color.RGBA{R: 255, G: 0, B: 0, A: 255} // Red for very high count
+	}
 }

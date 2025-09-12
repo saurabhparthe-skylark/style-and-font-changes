@@ -303,30 +303,26 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 		return
 	}
 
+	// We looping over the projects and draw the solution overlays
 	y := 30
 	for _, project := range projects {
 		switch project {
-		case "person_detection_lr":
-			// we get prople counter in person_derection_sr
-			if solution, exists := solutionsMap["people_counter"]; exists {
-				solutions.DrawPeopleCounter(mat, solution, &y)
+
+		case "drone_crowd_detection":
+			// case "unified_drone":
+			if solution, exists := solutionsMap["drone_crowd_detection"]; exists {
+				solutions.DrawCrowdDetection(mat, solution, &y)
 			}
+
 		case "drone_person_counter":
 			// case "unified_drone":
 			if solution, exists := solutionsMap["drone_person_counter"]; exists {
-				log.Info().Msgf("Drone person counter: %v", solution)
 				solutions.DrawPeopleCounter(mat, solution, &y)
 			}
 			// if solution, exists := solutionsMap["intrusion_detection"]; exists {
 			// 	solutions.DrawPeopleCounter(mat, solution, &y)
 			// }
-		case "vehicle_detection":
-			if solution, exists := solutionsMap[project]; exists {
-				solutions.DrawVehicle(mat, solution, &y)
-			} else {
-				defaultSolution := models.SolutionResults{CurrentCount: 0}
-				solutions.DrawVehicle(mat, defaultSolution, &y)
-			}
+
 		}
 	}
 }
@@ -455,10 +451,13 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 
 	jpegBytes := buf.GetBytes()
 
-	// Call AI service safely with timeout
-	// sanitizedID := sanitizeCameraID(rawFrame.CameraID)
-	// req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: []string{"unified_drone"}}
+	// fmt.Println("Camera ID", rawFrame.CameraID)
+	// fmt.Println("Projects", projects)
+
+	// reqRight := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: []string{"drone_person_counter"}}
 	req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: projects}
+
+	fmt.Println("Req", req.ProjectNames)
 
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
@@ -474,29 +473,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 			Msg("AI gRPC call failed (stream continues)")
 		return result
 	}
-	// log.Info().Msgf("AI response: %v", resp.GetResults())
-
-	// for projectName, project := range resp.Results {
-	// 	if project == nil || project.Solutions == nil {
-	// 		continue
-	// 	}
-	// 	log.Info().Str("Project", projectName).Msg("Project Solutions:")
-	// 	for solutionName, solution := range project.Solutions {
-	// 		if solution == nil {
-	// 			continue
-	// 		}
-	// 		log.Info().
-	// 			Str("Solution", solutionName).
-	// 			Int("CurrentCount", int(solution.GetCurrentCount())).
-	// 			Int("TotalCount", int(solution.GetTotalCount())).
-	// 			Int("MaxCount", int(solution.GetMaxCount())).
-	// 			Int("OutRegionCount", int(solution.GetOutRegionCount())).
-	// 			Bool("ViolationDetected", solution.GetViolationDetected()).
-	// 			Bool("IntrusionDetected", solution.GetIntrusionDetected()).
-	// 			Bool("LoiteringDetected", solution.GetLoiteringDetected()).
-	// 			Msg("Solution details")
-	// 	}
-	// }
+	log.Info().Msgf("AI response: %v", resp.GetResults())
 
 	// AI succeeded!
 	result.FrameProcessed = true
@@ -509,22 +486,6 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 		Msg("AI processing successful")
 
 	return result
-}
-
-// sanitizeCameraID replaces any non-alphanumeric/underscore characters with underscore for external services
-func sanitizeCameraID(id string) string {
-	if id == "" {
-		return id
-	}
-	var b strings.Builder
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('_')
-		}
-	}
-	return b.String()
 }
 
 func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionResponse, result *models.AIProcessingResult) {
@@ -577,14 +538,32 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		// Extract solutions from the response
 		if projectDetections.Solutions != nil {
 			for solutionKey, solutionData := range projectDetections.Solutions {
-				result.Solutions[solutionKey] = models.SolutionResults{
-					CurrentCount:      solutionData.GetCurrentCount(),
-					TotalCount:        solutionData.GetTotalCount(),
-					MaxCount:          solutionData.GetMaxCount(),
-					OutRegionCount:    solutionData.GetOutRegionCount(),
-					ViolationDetected: solutionData.ViolationDetected,
-					IntrusionDetected: solutionData.IntrusionDetected,
+				solutionResult := models.SolutionResults{
+					PeopleCurrentCount:   solutionData.GetCurrentCount(),
+					PeopleTotalCount:     solutionData.GetTotalCount(),
+					PeopleMaxCount:       solutionData.GetMaxCount(),
+					PeopleOutCount:       solutionData.GetOutRegionCount(),
+					PPEViolationDetected: solutionData.ViolationDetected,
+					IntrusionDetected:    solutionData.IntrusionDetected,
 				}
+
+				// Handle crowd detection data
+				if crowdData := solutionData.GetCrowdDetection(); crowdData != nil {
+					var crowds []models.CrowdInfo
+					for _, crowd := range crowdData.GetCrowds() {
+						crowds = append(crowds, models.CrowdInfo{
+							Rectangle:  crowd.GetRectangle(),
+							Count:      crowd.GetCount(),
+							AlertLevel: crowd.GetAlertLevel(),
+						})
+					}
+					solutionResult.CrowdDetection = &models.CrowdDetectionResult{
+						Crowds:           crowds,
+						TotalCrowdPeople: crowdData.GetTotalCrowdPeople(),
+					}
+				}
+
+				result.Solutions[solutionKey] = solutionResult
 			}
 		}
 	}

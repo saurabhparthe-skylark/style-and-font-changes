@@ -295,9 +295,6 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 	case models.DetectionTypePPE:
 		return alerts.HandlePPEDetection(detection, decision)
 
-	case models.DetectionTypeDrone, models.DetectionTypeAircraft, models.DetectionTypeThermal:
-		return alerts.HandleDroneDetection(detection, decision)
-
 	case models.DetectionTypeVehicle:
 		return alerts.HandleVehicleDetection(detection, decision)
 
@@ -310,12 +307,13 @@ func (s *Service) ShouldCreateAlert(detection models.Detection, projectName stri
 	case models.DetectionTypeGeneral:
 		return alerts.HandleGeneralDetection(detection, decision)
 
+	case models.DetectionTypeIntrusion:
+		return alerts.HandleIntrusionDetection(detection, decision)
+
 	default:
-		log.Warn().
-			Str("project_name", projectName).
-			Str("label", detection.Label).
-			Msg("Unknown detection type, using general handler")
-		return alerts.HandleGeneralDetection(detection, decision)
+		return models.AlertDecision{
+			ShouldAlert: false,
+		}
 	}
 }
 
@@ -334,8 +332,8 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 	case models.AlertTypePPEViolation:
 		payload = alerts.BuildConsolidatedPPEAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
-	case models.AlertTypeDroneDetection:
-		payload = alerts.BuildConsolidatedDroneAlert(detections, cameraID, rawFrameData, annotatedFrameData)
+	case models.AlertTypeIntrusionDetection:
+		payload = alerts.BuildConsolidatedIntrusionAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 
 	case models.AlertTypeVehicleDetection:
 		payload = alerts.BuildConsolidatedVehicleAlert(detections, cameraID, rawFrameData, annotatedFrameData)
@@ -356,7 +354,6 @@ func (s *Service) processConsolidatedAlert(detections []models.Detection, decisi
 		log.Warn().
 			Str("alert_type", string(decision.AlertType)).
 			Msg("Unknown alert type, using general alert builder")
-		payload = alerts.BuildConsolidatedGeneralAlert(detections, cameraID, rawFrameData, annotatedFrameData)
 	}
 
 	// Add model and processing metadata
@@ -503,43 +500,48 @@ func (s *Service) processSuppression(detection models.Detection, decision models
 // getDetectionType determines the detection type based on project name and label
 func (s *Service) getDetectionType(projectName, label string) models.DetectionType {
 	projectLower := strings.ToLower(projectName)
-	labelLower := strings.ToLower(label)
+	// labelLower := strings.ToLower(label)
 
 	// Project name based mapping (primary)
 	switch {
-	case strings.Contains(projectLower, "ppe_detection") || strings.Contains(projectLower, "ppe_detection_lr") || strings.Contains(projectLower, "ppe_detection_new"):
+	case strings.Contains(projectLower, "drone_intrusion_detection"):
+		return models.DetectionTypeIntrusion
+	case strings.Contains(projectLower, "drone_ppe_detection"):
 		return models.DetectionTypePPE
-	case strings.Contains(projectLower, "cellphone"):
-		return models.DetectionTypeCellphone
-	case strings.Contains(projectLower, "drone") || strings.Contains(projectLower, "aircraft"):
-		return models.DetectionTypeDrone
-	case strings.Contains(projectLower, "vehicle_detection_s") || strings.Contains(projectLower, "vehicle_detection_lr"):
-		return models.DetectionTypeVehicle
-	case strings.Contains(projectLower, "thermal_aircraft"):
-		return models.DetectionTypeThermal
-	case strings.Contains(projectLower, "fire_smoke"):
-		return models.DetectionTypeFireSmoke
-	case strings.Contains(projectLower, "person_detection") || strings.Contains(projectLower, "people_counter") || strings.Contains(projectLower, "person_detection_lr") || strings.Contains(projectLower, "person_detection_sr"):
-		return models.DetectionTypePerson
+
+		// case strings.Contains(projectLower, "ppe_detection") || strings.Contains(projectLower, "ppe_detection_lr") || strings.Contains(projectLower, "ppe_detection_new"):
+		// 	return models.DetectionTypePPE
+		// case strings.Contains(projectLower, "cellphone"):
+		// 	return models.DetectionTypeCellphone
+		// case strings.Contains(projectLower, "drone") || strings.Contains(projectLower, "aircraft"):
+		// 	return models.DetectionTypeDrone
+		// case strings.Contains(projectLower, "vehicle_detection_s") || strings.Contains(projectLower, "vehicle_detection_lr"):
+		// 	return models.DetectionTypeVehicle
+		// case strings.Contains(projectLower, "fire_smoke"):
+		// 	return models.DetectionTypeFireSmoke
+		// case strings.Contains(projectLower, "person_detection") || strings.Contains(projectLower, "people_counter") || strings.Contains(projectLower, "person_detection_lr") || strings.Contains(projectLower, "person_detection_sr"):
+		// 	return models.DetectionTypePerson
 	}
 
 	// Label based mapping (secondary)
-	switch {
-	case strings.Contains(labelLower, "ppe") || strings.Contains(labelLower, "helmet") || strings.Contains(labelLower, "vest"):
-		return models.DetectionTypePPE
-	case strings.Contains(labelLower, "phone") || strings.Contains(labelLower, "cellphone"):
-		return models.DetectionTypeCellphone
-	case strings.Contains(labelLower, "drone") || strings.Contains(labelLower, "aircraft") || strings.Contains(labelLower, "quadcopter"):
-		return models.DetectionTypeDrone
-	case strings.Contains(labelLower, "car") || strings.Contains(labelLower, "truck") || strings.Contains(labelLower, "bus") || strings.Contains(labelLower, "motorcycle") || strings.Contains(labelLower, "bike") || strings.Contains(labelLower, "scooter") || strings.Contains(labelLower, "van") || strings.Contains(labelLower, "vehicle"):
-		return models.DetectionTypeVehicle
-	case strings.Contains(labelLower, "fire") || strings.Contains(labelLower, "smoke"):
-		return models.DetectionTypeFireSmoke
-	case strings.Contains(labelLower, "person") || strings.Contains(labelLower, "people"):
-		return models.DetectionTypePerson
-	default:
-		return models.DetectionTypeGeneral
-	}
+	// switch {
+	// case strings.Contains(labelLower, "ppe") || strings.Contains(labelLower, "helmet") || strings.Contains(labelLower, "vest"):
+	// 	return models.DetectionTypePPE
+	// case strings.Contains(labelLower, "phone") || strings.Contains(labelLower, "cellphone"):
+	// 	return models.DetectionTypeCellphone
+	// case strings.Contains(labelLower, "drone") || strings.Contains(labelLower, "aircraft") || strings.Contains(labelLower, "quadcopter"):
+	// 	return models.DetectionTypeDrone
+	// case strings.Contains(labelLower, "car") || strings.Contains(labelLower, "truck") || strings.Contains(labelLower, "bus") || strings.Contains(labelLower, "motorcycle") || strings.Contains(labelLower, "bike") || strings.Contains(labelLower, "scooter") || strings.Contains(labelLower, "van") || strings.Contains(labelLower, "vehicle"):
+	// 	return models.DetectionTypeVehicle
+	// case strings.Contains(labelLower, "fire") || strings.Contains(labelLower, "smoke"):
+	// 	return models.DetectionTypeFireSmoke
+	// case strings.Contains(labelLower, "person") || strings.Contains(labelLower, "people"):
+	// 	return models.DetectionTypePerson
+	// default:
+	// 	return models.DetectionTypeGeneral
+	// }
+
+	return models.DetectionTypeGeneral
 }
 
 // findPrimaryDetection finds the detection with highest confidence in a group
@@ -599,8 +601,6 @@ func (s *Service) processSingleAlert(detection models.Detection, decision models
 	switch decision.AlertType {
 	case models.AlertTypePPEViolation:
 		payload = alerts.BuildPPEAlert(detection, cameraID, rawFrameData, annotatedFrameData)
-	case models.AlertTypeDroneDetection:
-		payload = alerts.BuildDroneAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	case models.AlertTypeVehicleDetection:
 		payload = alerts.BuildVehicleAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	case models.AlertTypeFireSmoke:
@@ -611,8 +611,6 @@ func (s *Service) processSingleAlert(detection models.Detection, decision models
 		payload = alerts.BuildSelfLearningAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	case models.AlertTypePersonDetection:
 		payload = alerts.BuildPersonAlert(detection, cameraID, rawFrameData, annotatedFrameData)
-	default:
-		payload = alerts.BuildGeneralAlert(detection, cameraID, rawFrameData, annotatedFrameData)
 	}
 
 	// Add processing metadata

@@ -542,44 +542,103 @@ func (s *Service) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCh
 		return response
 	}
 
-	// Set timeout for frame reading (10 seconds for validation)
-	timeout := time.After(10 * time.Second)
-	frameReadSuccess := make(chan bool, 1)
+	// Create context with timeout for proper cancellation (increased for frame flushing)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-	var frame gocv.Mat
+	// Channel to receive frame reading results
+	type frameResult struct {
+		frame   gocv.Mat
+		success bool
+	}
+	frameResultChan := make(chan frameResult, 1)
+
 	var actualFPS, actualWidth, actualHeight float64
 
-	// Try to read frame in goroutine to handle timeout
+	// Try to read frame in goroutine with proper resource management
 	go func() {
-		frame = gocv.NewMat()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("Panic in frame reading goroutine")
+				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
+			}
+		}()
 
-		// Try to read several frames to ensure stream is stable
-		for i := 0; i < 5; i++ {
-			if cap.Read(&frame) && !frame.Empty() {
-				frameReadSuccess <- true
+		localFrame := gocv.NewMat()
+		flushFrame := gocv.NewMat()
+		defer flushFrame.Close()
+
+		// First, flush the first 30 frames to skip initial grey/black frames
+		log.Info().Msg("Flushing first 30 frames to skip initial stream artifacts")
+		for i := 0; i < 30; i++ {
+			select {
+			case <-ctx.Done():
+				localFrame.Close()
+				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
+				return
+			default:
+			}
+
+			// Read and discard frame
+			cap.Read(&flushFrame)
+
+			// Small delay to allow stream to stabilize
+			select {
+			case <-ctx.Done():
+				localFrame.Close()
+				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+
+		log.Info().Msg("Finished flushing frames, now capturing thumbnail frame")
+
+		// Now try to read a good frame for thumbnail
+		for i := 0; i < 10; i++ {
+			select {
+			case <-ctx.Done():
+				localFrame.Close()
+				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
+				return
+			default:
+			}
+
+			if cap.Read(&localFrame) && !localFrame.Empty() {
+				// Success - send the frame (ownership transferred to main goroutine)
+				frameResultChan <- frameResult{frame: localFrame, success: true}
 				return
 			}
-			time.Sleep(200 * time.Millisecond) // Longer delay for validation
+
+			// Small delay before retry
+			select {
+			case <-ctx.Done():
+				localFrame.Close()
+				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
 		}
-		frameReadSuccess <- false
+
+		// Failed to read stable frames after flushing
+		localFrame.Close()
+		frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
 	}()
 
-	// Wait for frame read or timeout
+	// Wait for frame read result or context timeout
+	var frame gocv.Mat
 	select {
-	case success := <-frameReadSuccess:
-		if !success {
-			if !frame.Empty() {
-				frame.Close()
-			}
+	case result := <-frameResultChan:
+		frame = result.frame
+		if !result.success {
+			frame.Close()
 			response.ErrorDetail = "Failed to read stable frames from RTSP stream"
 			log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
 			return response
 		}
-	case <-timeout:
-		if !frame.Empty() {
-			frame.Close()
-		}
-		response.ErrorDetail = "Timeout reading from RTSP stream (10s limit)"
+	case <-ctx.Done():
+		// Timeout occurred - goroutine will clean up its own resources
+		response.ErrorDetail = "Timeout reading from RTSP stream (15s limit)"
 		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
 		return response
 	}

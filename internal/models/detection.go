@@ -8,17 +8,16 @@ import (
 type DetectionType string
 
 const (
-	DetectionTypePPE         DetectionType = "ppe_detection_lr"
-	DetectionTypeCellphone   DetectionType = "cellphone_detection"
-	DetectionTypeDrone       DetectionType = "drone_detection"
-	DetectionTypeAircraft    DetectionType = "aircraft_detection"
-	DetectionTypeThermal     DetectionType = "thermal_aircraft_detection"
-	DetectionTypeFireSmoke   DetectionType = "fire_smoke_indoor_detection"
-	DetectionTypeVehicle     DetectionType = "vehicle_detection"
 	DetectionTypeAnomaly     DetectionType = "anomaly_detection"
 	DetectionTypeSelfLearned DetectionType = "self_learned_detection"
-	DetectionTypePerson      DetectionType = "person_detection"
 	DetectionTypeGeneral     DetectionType = "general_detection"
+	DetectionTypeCellphone   DetectionType = "cellphone_detection"
+	DetectionTypeDrone       DetectionType = "drone_detection"
+	DetectionTypeFireSmoke   DetectionType = "fire_smoke_indoor_detection"
+	DetectionTypeVehicle     DetectionType = "vehicle_detection"
+	DetectionTypePPE         DetectionType = "ppe_detection_lr"
+	DetectionTypePerson      DetectionType = "person_detection"
+	DetectionTypeIntrusion   DetectionType = "intrusion_detection"
 )
 
 // DetectionLevel represents the level/priority of detection from AI
@@ -298,14 +297,35 @@ type MessagePublisher interface {
 	Publish(subject string, data interface{}) error
 }
 
+// CrowdInfo represents individual crowd detection information
+type CrowdInfo struct {
+	Rectangle  []float32 `json:"rectangle"` // [x1, y1, x2, y2]
+	Count      int32     `json:"count"`
+	AlertLevel string    `json:"alert_level"` // "low", "medium", "high"
+}
+
+// CrowdDetectionResult represents crowd detection results
+type CrowdDetectionResult struct {
+	Crowds           []CrowdInfo `json:"crowds"`
+	TotalCrowdPeople int32       `json:"total_crowd_people"`
+}
+
 // SolutionResults represents the results from AI solution processing
 type SolutionResults struct {
-	CurrentCount      int32 `json:"current_count"`
-	TotalCount        int32 `json:"total_count"`
-	MaxCount          int32 `json:"max_count"`
-	OutRegionCount    int32 `json:"out_region_count"`
-	ViolationDetected *bool `json:"violation_detected,omitempty"`
+	// People Counter Solution
+	PeopleCurrentCount int32 `json:"people_current_count"`
+	PeopleTotalCount   int32 `json:"people_total_count"`
+	PeopleMaxCount     int32 `json:"people_max_count"`
+	PeopleOutCount     int32 `json:"people_out_count"`
+
+	// PPE Detection Solution
+	PPEViolationDetected *bool `json:"ppe_violation_detected,omitempty"`
+
+	// Intrusion Detection Solution
 	IntrusionDetected *bool `json:"intrusion_detected,omitempty"`
+
+	// Crowd Detection Solution
+	CrowdDetection *CrowdDetectionResult `json:"crowd_detection,omitempty"`
 }
 
 // AIProcessingResult represents the complete result from AI processing
