@@ -504,10 +504,12 @@ func (s *Service) getDetectionType(projectName, label string) models.DetectionTy
 
 	// Project name based mapping (primary)
 	switch {
-	case strings.Contains(projectLower, "drone_intrusion_detection"):
+	case strings.Contains(projectLower, "drone_intrusion_detection") || strings.Contains(projectLower, "drone_thermal_intrusion_detection"):
 		return models.DetectionTypeIntrusion
 	case strings.Contains(projectLower, "drone_ppe_detection"):
 		return models.DetectionTypePPE
+	case strings.Contains(projectLower, "drone_fire_smoke_detection"):
+		return models.DetectionTypeFireSmoke
 
 		// case strings.Contains(projectLower, "ppe_detection") || strings.Contains(projectLower, "ppe_detection_lr") || strings.Contains(projectLower, "ppe_detection_new"):
 		// 	return models.DetectionTypePPE

@@ -457,8 +457,6 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	// reqRight := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: []string{"drone_person_counter"}}
 	req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: projects}
 
-	fmt.Println("Req", req.ProjectNames)
-
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
@@ -473,7 +471,6 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 			Msg("AI gRPC call failed (stream continues)")
 		return result
 	}
-	log.Info().Msgf("AI response: %v", resp.GetResults())
 
 	// AI succeeded!
 	result.FrameProcessed = true

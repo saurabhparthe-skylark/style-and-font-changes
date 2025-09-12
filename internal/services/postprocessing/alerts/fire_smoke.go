@@ -10,13 +10,11 @@ import (
 
 // HandleFireSmokeDetection handles fire and smoke detection alerts
 func HandleFireSmokeDetection(detection models.Detection, decision models.AlertDecision) models.AlertDecision {
-	if detection.SendAlert {
-		decision.ShouldAlert = true
-	}
 
 	isFire := detection.IsFire != nil && *detection.IsFire
 	isSmoke := detection.IsSmoke != nil && *detection.IsSmoke
 
+	decision.ShouldAlert = true
 	decision.AlertType = models.AlertTypeFireSmoke
 	decision.Severity = models.AlertSeverityCritical
 	decision.Title = CreateFireSmokeTitle(isFire, isSmoke)

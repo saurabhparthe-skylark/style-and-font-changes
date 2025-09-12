@@ -13,7 +13,7 @@ const (
 	DetectionTypeGeneral     DetectionType = "general_detection"
 	DetectionTypeCellphone   DetectionType = "cellphone_detection"
 	DetectionTypeDrone       DetectionType = "drone_detection"
-	DetectionTypeFireSmoke   DetectionType = "fire_smoke_indoor_detection"
+	DetectionTypeFireSmoke   DetectionType = "fire_smoke_detection"
 	DetectionTypeVehicle     DetectionType = "vehicle_detection"
 	DetectionTypePPE         DetectionType = "ppe_detection_lr"
 	DetectionTypePerson      DetectionType = "person_detection"
