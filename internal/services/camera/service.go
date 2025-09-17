@@ -105,11 +105,17 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	// Configure status - always start when creating a new camera
 	status := models.CameraStatusStart
 
+	projects := make([]string, 0, len(req.CameraSolutions))
+	for _, solution := range req.CameraSolutions {
+		if solution.ProjectName != "" {
+			projects = append(projects, solution.ProjectName)
+		}
+	}
+
 	// Create camera with configuration
 	camera := &models.Camera{
 		ID:        req.CameraID,
 		URL:       req.URL,
-		Projects:  req.Projects,
 		IsActive:  false, // Will be set by lifecycle manager
 		CreatedAt: time.Now(),
 
@@ -124,6 +130,11 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		AIEndpoint: aiEndpoint,
 		AITimeout:  aiTimeout,
 
+		// Camera Configuration and ROI Data
+		Config:          req.Config,
+		CameraSolutions: req.CameraSolutions,
+		ROIData:         req.ROIData,
+		Projects:        projects,
 		// FPS Calculation setup
 		RecentFrameTimes: make([]time.Time, 0, 30),
 		FPSWindowSize:    30,
@@ -149,7 +160,7 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 	log.Info().
 		Str("camera_id", req.CameraID).
 		Str("url", req.URL).
-		Strs("projects", req.Projects).
+		Int("solution_count", len(camera.CameraSolutions)).
 		Bool("ai_enabled", camera.AIEnabled).
 		Str("ai_endpoint", camera.AIEndpoint).
 		Dur("ai_timeout", camera.AITimeout).
@@ -197,7 +208,6 @@ func (cm *CameraManager) GetCamera(cameraID string) (*models.CameraResponse, err
 	return &models.CameraResponse{
 		CameraID:         camera.ID,
 		URL:              camera.URL,
-		Projects:         camera.Projects,
 		IsActive:         camera.IsActive,
 		Status:           camera.Status,
 		IsRecording:      camera.IsRecording,
@@ -219,6 +229,9 @@ func (cm *CameraManager) GetCamera(cameraID string) (*models.CameraResponse, err
 		WebRTCUrl:        camera.WebRTCUrl,
 		HLSUrl:           camera.HLSUrl,
 		MJPEGUrl:         camera.MJPEGUrl,
+		Config:           camera.Config,
+		CameraSolutions:  camera.CameraSolutions,
+		ROIData:          camera.ROIData,
 	}, nil
 }
 
@@ -269,7 +282,6 @@ func (cm *CameraManager) GetCameras() []*models.CameraResponse {
 		cameras = append(cameras, &models.CameraResponse{
 			CameraID:         camera.ID,
 			URL:              camera.URL,
-			Projects:         camera.Projects,
 			IsActive:         camera.IsActive,
 			Status:           camera.Status,
 			IsRecording:      camera.IsRecording,
@@ -291,6 +303,9 @@ func (cm *CameraManager) GetCameras() []*models.CameraResponse {
 			WebRTCUrl:        camera.WebRTCUrl,
 			HLSUrl:           camera.HLSUrl,
 			MJPEGUrl:         camera.MJPEGUrl,
+			Config:           camera.Config,
+			CameraSolutions:  camera.CameraSolutions,
+			ROIData:          camera.ROIData,
 		})
 	}
 
@@ -399,14 +414,7 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 			Msg("Camera URL updated, will restart camera")
 	}
 
-	// Update projects (no restart needed)
-	if req.Projects != nil {
-		camera.Projects = req.Projects
-		log.Info().
-			Str("camera_id", cameraID).
-			Strs("projects", req.Projects).
-			Msg("Camera projects updated dynamically")
-	}
+	// Projects field removed - now using CameraSolutions
 
 	// Update AI configuration (NO RESTART NEEDED - dynamic!)
 	if req.AIEnabled != nil && *req.AIEnabled != camera.AIEnabled {
@@ -430,6 +438,32 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	// Update recording settings (no restart needed)
 	if req.EnableRecord != nil {
 		camera.EnableRecord = *req.EnableRecord
+	}
+
+	// Update camera configuration (no restart needed)
+	if req.Config != nil {
+		camera.Config = req.Config
+		log.Info().
+			Str("camera_id", cameraID).
+			Msg("Camera config updated dynamically")
+	}
+
+	// Update camera solutions (no restart needed - can be changed dynamically)
+	if req.CameraSolutions != nil {
+		camera.CameraSolutions = req.CameraSolutions
+		log.Info().
+			Str("camera_id", cameraID).
+			Int("solution_count", len(req.CameraSolutions)).
+			Msg("Camera solutions updated dynamically")
+	}
+
+	// Update ROI data (no restart needed)
+	if req.ROIData != nil {
+		camera.ROIData = req.ROIData
+		log.Info().
+			Str("camera_id", cameraID).
+			Int("roi_count", len(req.ROIData)).
+			Msg("Camera ROI data updated dynamically")
 	}
 
 	// Update status

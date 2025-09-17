@@ -2,8 +2,10 @@ package webrtc
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,8 +69,14 @@ func NewPublisher(cfg *config.Config) (*Publisher, error) {
 		streams:      make(map[string]*Stream),
 		cameraSource: make(map[string]string),
 	}
+
+	// Clean up any stale sessions from previous runs
+	log.Info().Msg("Cleaning up stale MediaMTX sessions from previous runs")
+	publisher.cleanupAllMediaMTXSessions()
+
 	log.Info().
 		Str("mediamtx_url", cfg.MediaMTXURL).
+		Str("mediamtx_api_url", cfg.MediaMTXAPIURL).
 		Msg("WebRTC Publisher initialized with MediaMTX")
 	return publisher, nil
 }
@@ -119,10 +127,14 @@ func (p *Publisher) RegisterCameraSource(cameraID, rtspURL string) {
 func (p *Publisher) createStream(cameraID string, width, height int) (*Stream, error) {
 	whipURL := fmt.Sprintf("%s/live/%s/whip", p.cfg.MediaMTXURL, cameraID)
 
-	// best-effort cleanup of any lingering WebRTC sessions or publishers on this path
+	// Aggressive cleanup of any lingering sessions before attempting to publish
+	log.Debug().Str("camera_id", cameraID).Msg("Performing pre-publish cleanup")
 	if err := p.cleanupMediaMTXSessions(cameraID); err != nil {
 		log.Warn().Err(err).Str("camera_id", cameraID).Msg("Pre-publish cleanup failed; proceeding anyway")
 	}
+
+	// Small delay to ensure cleanup takes effect
+	time.Sleep(100 * time.Millisecond)
 
 	whipClient := &http.Client{Timeout: p.cfg.WHIPTimeout}
 
@@ -135,13 +147,21 @@ func (p *Publisher) createStream(cameraID string, width, height int) (*Stream, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PeerConnection: %w", err)
 	}
+
+	// Ensure cleanup on any error
+	cleanupPC := func() {
+		if pc != nil {
+			pc.Close()
+		}
+	}
+
 	videoTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8}, "video", cameraID)
 	if err != nil {
-		pc.Close()
+		cleanupPC()
 		return nil, fmt.Errorf("failed to create video track: %w", err)
 	}
 	if _, err := pc.AddTrack(videoTrack); err != nil {
-		pc.Close()
+		cleanupPC()
 		return nil, fmt.Errorf("failed to add video track: %w", err)
 	}
 
@@ -154,70 +174,104 @@ func (p *Publisher) createStream(cameraID string, width, height int) (*Stream, e
 		}
 	} else {
 		log.Warn().Err(err).Str("camera_id", cameraID).Msg("Failed to create audio track; continuing without audio")
+		audioTrack = nil
 	}
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
-		pc.Close()
+		cleanupPC()
 		return nil, fmt.Errorf("failed to create offer: %w", err)
 	}
 	if err := pc.SetLocalDescription(offer); err != nil {
-		pc.Close()
+		cleanupPC()
 		return nil, fmt.Errorf("failed to set local description: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, whipURL, strings.NewReader(pc.LocalDescription().SDP))
-	if err != nil {
-		pc.Close()
-		return nil, fmt.Errorf("failed to create WHIP request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/sdp")
-	req.Header.Set("Accept", "application/sdp")
-	resp, err := whipClient.Do(req)
-	if err != nil {
-		pc.Close()
-		return nil, fmt.Errorf("failed WHIP POST: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		// if conflict, try cleanup once and retry
-		if resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusLocked || resp.StatusCode == http.StatusForbidden {
-			body, _ := io.ReadAll(resp.Body)
-			log.Warn().Str("camera_id", cameraID).Int("status", resp.StatusCode).Msg("WHIP conflict; attempting cleanup and retry")
+	// Try WHIP connection with retries
+	var resp *http.Response
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Info().Str("camera_id", cameraID).Int("attempt", attempt+1).Msg("Retrying WHIP connection")
+			// Exponential backoff with jitter
+			backoff := time.Duration(attempt*attempt) * 500 * time.Millisecond
+			time.Sleep(backoff)
+
+			// Cleanup before retry
 			_ = p.cleanupMediaMTXSessions(cameraID)
-			// retry once
-			req2, _ := http.NewRequest(http.MethodPost, whipURL, strings.NewReader(pc.LocalDescription().SDP))
-			req2.Header.Set("Content-Type", "application/sdp")
-			req2.Header.Set("Accept", "application/sdp")
-			resp2, err2 := whipClient.Do(req2)
-			if err2 != nil {
-				pc.Close()
-				return nil, fmt.Errorf("failed WHIP POST after cleanup: %w", err2)
-			}
-			defer resp2.Body.Close()
-			if resp2.StatusCode != http.StatusCreated {
-				pc.Close()
-				body2, _ := io.ReadAll(resp2.Body)
-				return nil, fmt.Errorf("WHIP POST failed after cleanup: %d - %s (first: %d - %s)", resp2.StatusCode, string(body2), resp.StatusCode, string(body))
-			}
-			// replace resp with resp2 for the normal flow below
-			resp = resp2
-		} else {
-			pc.Close()
-			body, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("WHIP POST failed: %d - %s", resp.StatusCode, string(body))
+			time.Sleep(200 * time.Millisecond)
 		}
+
+		req, err := http.NewRequest(http.MethodPost, whipURL, strings.NewReader(pc.LocalDescription().SDP))
+		if err != nil {
+			if attempt == maxRetries-1 {
+				cleanupPC()
+				return nil, fmt.Errorf("failed to create WHIP request: %w", err)
+			}
+			continue
+		}
+		req.Header.Set("Content-Type", "application/sdp")
+		req.Header.Set("Accept", "application/sdp")
+
+		resp, err = whipClient.Do(req)
+		if err != nil {
+			if attempt == maxRetries-1 {
+				cleanupPC()
+				return nil, fmt.Errorf("failed WHIP POST after %d attempts: %w", maxRetries, err)
+			}
+			continue
+		}
+
+		if resp.StatusCode == http.StatusCreated {
+			// Success!
+			break
+		}
+
+		// Handle specific error cases
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusLocked ||
+			resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable {
+			log.Warn().
+				Str("camera_id", cameraID).
+				Int("status", resp.StatusCode).
+				Str("body", string(body)).
+				Int("attempt", attempt+1).
+				Msg("WHIP connection conflict, will retry")
+
+			if attempt == maxRetries-1 {
+				cleanupPC()
+				return nil, fmt.Errorf("WHIP POST failed after %d attempts: %d - %s", maxRetries, resp.StatusCode, string(body))
+			}
+			continue
+		}
+
+		// Unrecoverable error
+		cleanupPC()
+		return nil, fmt.Errorf("WHIP POST failed: %d - %s", resp.StatusCode, string(body))
 	}
+
+	if resp == nil || resp.StatusCode != http.StatusCreated {
+		cleanupPC()
+		return nil, fmt.Errorf("failed to establish WHIP connection after %d attempts", maxRetries)
+	}
+
+	defer resp.Body.Close()
 	answer, err := io.ReadAll(resp.Body)
 	if err != nil {
-		pc.Close()
+		cleanupPC()
 		return nil, fmt.Errorf("failed reading WHIP answer: %w", err)
 	}
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: string(answer)}); err != nil {
-		pc.Close()
+		cleanupPC()
 		return nil, fmt.Errorf("failed to set remote description: %w", err)
 	}
 	whipResource := resp.Header.Get("Location")
+	if whipResource != "" && !strings.HasPrefix(whipResource, "http") {
+		// Make it absolute if relative
+		whipResource = fmt.Sprintf("%s%s", p.cfg.MediaMTXURL, whipResource)
+	}
 
 	// Video encoder
 	sizeArg := fmt.Sprintf("%dx%d", p.cfg.OutputWidth, p.cfg.OutputHeight)
@@ -608,25 +662,36 @@ func (p *Publisher) StopStream(cameraID string) error {
 		return nil
 	}
 
+	// Mark as not running first
 	stream.isRunning = false
-	close(stream.stopCh)
-	close(stream.frameBuffer)
 
+	// Close channels safely
+	func() {
+		defer func() { _ = recover() }()
+		close(stream.stopCh)
+	}()
+	func() {
+		defer func() { _ = recover() }()
+		close(stream.frameBuffer)
+	}()
+
+	// Video cleanup
 	if stream.videoIn != nil {
 		stream.videoIn.Close()
 	}
-
 	if stream.videoProcess != nil {
 		_ = terminateProcess(stream.videoProcess)
 	}
-
 	if stream.videoOut != nil {
 		stream.videoOut.Close()
 	}
 
 	// Audio cleanup
 	if stream.audioStopChan != nil {
-		close(stream.audioStopChan)
+		func() {
+			defer func() { _ = recover() }()
+			close(stream.audioStopChan)
+		}()
 	}
 	if stream.audioOut != nil {
 		stream.audioOut.Close()
@@ -635,15 +700,29 @@ func (p *Publisher) StopStream(cameraID string) error {
 		_ = terminateProcess(stream.audioProcess)
 	}
 
+	// WebRTC cleanup
 	if stream.pc != nil {
 		_ = stream.pc.Close()
 	}
 	if stream.whipResource != "" && stream.whipClient != nil {
-		req, _ := http.NewRequest(http.MethodDelete, stream.whipResource, nil)
-		_, _ = stream.whipClient.Do(req)
+		deleteReq, _ := http.NewRequest(http.MethodDelete, stream.whipResource, nil)
+		if deleteReq != nil {
+			resp, err := stream.whipClient.Do(deleteReq)
+			if err != nil {
+				log.Warn().Err(err).Str("camera_id", cameraID).Msg("Failed to delete WHIP resource")
+			} else if resp != nil {
+				resp.Body.Close()
+			}
+		}
 	}
 
+	// Remove from map
 	delete(p.streams, cameraID)
+
+	// Force cleanup MediaMTX sessions for this specific camera
+	if err := p.cleanupMediaMTXSessions(cameraID); err != nil {
+		log.Warn().Err(err).Str("camera_id", cameraID).Msg("Failed to cleanup MediaMTX sessions")
+	}
 
 	log.Info().
 		Str("camera_id", cameraID).
@@ -659,15 +738,24 @@ func (p *Publisher) Shutdown(ctx context.Context) error {
 	p.streamMutex.Lock()
 	defer p.streamMutex.Unlock()
 
+	// Clean up all active streams
 	for cameraID, stream := range p.streams {
 		stream.isRunning = false
-		close(stream.stopCh)
-		close(stream.frameBuffer)
 
+		// Close channels safely
+		func() {
+			defer func() { _ = recover() }()
+			close(stream.stopCh)
+		}()
+		func() {
+			defer func() { _ = recover() }()
+			close(stream.frameBuffer)
+		}()
+
+		// Video cleanup
 		if stream.videoIn != nil {
 			stream.videoIn.Close()
 		}
-
 		if stream.videoProcess != nil {
 			_ = terminateProcess(stream.videoProcess)
 		}
@@ -677,13 +765,37 @@ func (p *Publisher) Shutdown(ctx context.Context) error {
 
 		// Audio cleanup
 		if stream.audioStopChan != nil {
-			close(stream.audioStopChan)
+			func() {
+				defer func() { _ = recover() }()
+				close(stream.audioStopChan)
+			}()
 		}
 		if stream.audioOut != nil {
 			stream.audioOut.Close()
 		}
 		if stream.audioProcess != nil {
 			_ = terminateProcess(stream.audioProcess)
+		}
+
+		// WebRTC cleanup - properly close PeerConnection and delete WHIP resource
+		if stream.pc != nil {
+			_ = stream.pc.Close()
+		}
+		if stream.whipResource != "" && stream.whipClient != nil {
+			deleteReq, _ := http.NewRequest(http.MethodDelete, stream.whipResource, nil)
+			if deleteReq != nil {
+				resp, err := stream.whipClient.Do(deleteReq)
+				if err != nil {
+					log.Warn().Err(err).Str("camera_id", cameraID).Msg("Failed to delete WHIP resource during shutdown")
+				} else {
+					resp.Body.Close()
+				}
+			}
+		}
+
+		// Force cleanup MediaMTX sessions for this camera
+		if err := p.cleanupMediaMTXSessions(cameraID); err != nil {
+			log.Warn().Err(err).Str("camera_id", cameraID).Msg("Failed to cleanup MediaMTX sessions during shutdown")
 		}
 
 		log.Info().
@@ -693,70 +805,174 @@ func (p *Publisher) Shutdown(ctx context.Context) error {
 			Msg("WebRTC stream stopped during shutdown")
 	}
 
+	// Clear all streams
 	p.streams = make(map[string]*Stream)
+
+	// Final cleanup of all MediaMTX WebRTC sessions (belt and suspenders)
+	p.cleanupAllMediaMTXSessions()
 
 	return nil
 }
 
-// for a given camera path to avoid WHIP/WHEP conflicts. It's best-effort and never fatal.
+// --- Refactored cleanup functions ---------------------------------------------------
+//
+// These replace the prior brittle string-parsing and non-existent endpoint calls.
+// They call the documented endpoints:
+//
+//	GET  /v3/webrtcsessions/list
+//	POST /v3/webrtcsessions/kick/{id}
+//	GET  /v3/rtspsessions/list
+//	POST /v3/rtspsessions/kick/{id}
+//
+// The list responses are assumed to be JSON like: {"items":[{"id":"...", "path":"..."}]}
+type mediaMTXSessionItem struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+type mediaMTXSessionsList struct {
+	Items []mediaMTXSessionItem `json:"items"`
+}
+
 func (p *Publisher) cleanupMediaMTXSessions(cameraID string) error {
 	apiBase := p.cfg.MediaMTXAPIURL
 	if apiBase == "" {
 		return nil
 	}
 
-	// Kick publisher on the path (best-effort)
 	path := fmt.Sprintf("live/%s", cameraID)
-	reqBody := strings.NewReader(fmt.Sprintf(`{"path":"%s"}`, path))
-	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/v3/paths/kick/publisher", apiBase), reqBody)
-	if err == nil {
-		req.Header.Set("Content-Type", "application/json")
-		_, _ = http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// 1) Clean WebRTC sessions that reference this path
+	webrtcListURL := fmt.Sprintf("%s/v3/webrtcsessions/list", apiBase)
+	if resp, err := client.Get(webrtcListURL); err == nil && resp != nil {
+		func() {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				log.Debug().Str("url", webrtcListURL).Int("status", resp.StatusCode).Msg("Non-OK response fetching webrtcsessions list")
+				return
+			}
+			var list mediaMTXSessionsList
+			if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+				log.Warn().Err(err).Str("url", webrtcListURL).Msg("Failed to decode webrtcsessions list")
+				return
+			}
+			for _, item := range list.Items {
+				// match if the path is exactly equal or contains our live path
+				if item.Path == path || strings.Contains(item.Path, path) {
+					kickURL := fmt.Sprintf("%s/v3/webrtcsessions/kick/%s", apiBase, item.ID)
+					if err := doPostNoBody(client, kickURL); err != nil {
+						log.Warn().Err(err).Str("session_id", item.ID).Str("camera_id", cameraID).Msg("Failed to kick WebRTC session")
+					} else {
+						log.Info().Str("session_id", item.ID).Str("camera_id", cameraID).Msg("Kicked WebRTC session")
+					}
+				}
+			}
+		}()
+	} else if err != nil {
+		log.Debug().Err(err).Str("url", webrtcListURL).Msg("Failed to fetch webrtcsessions list")
 	}
 
-	// List WebRTC sessions and delete ones that reference our path
-	listReq, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/v3/webrtcsessions/list", apiBase), nil)
-	if err != nil {
-		return nil
+	// 2) Clean RTSP sessions that reference this path
+	rtspListURL := fmt.Sprintf("%s/v3/rtspsessions/list", apiBase)
+	if resp, err := client.Get(rtspListURL); err == nil && resp != nil {
+		func() {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				log.Debug().Str("url", rtspListURL).Int("status", resp.StatusCode).Msg("Non-OK response fetching rtspsessions list")
+				return
+			}
+			var list mediaMTXSessionsList
+			if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+				log.Warn().Err(err).Str("url", rtspListURL).Msg("Failed to decode rtspsessions list")
+				return
+			}
+			for _, item := range list.Items {
+				if item.Path == path || strings.Contains(item.Path, path) {
+					kickURL := fmt.Sprintf("%s/v3/rtspsessions/kick/%s", apiBase, item.ID)
+					if err := doPostNoBody(client, kickURL); err != nil {
+						log.Warn().Err(err).Str("session_id", item.ID).Str("camera_id", cameraID).Msg("Failed to kick RTSP session")
+					} else {
+						log.Info().Str("session_id", item.ID).Str("camera_id", cameraID).Msg("Kicked RTSP session")
+					}
+				}
+			}
+		}()
+	} else if err != nil {
+		log.Debug().Err(err).Str("url", rtspListURL).Msg("Failed to fetch rtspsessions list")
 	}
-	resp, err := http.DefaultClient.Do(listReq)
-	if err != nil {
-		return nil
+
+	return nil
+}
+
+func (p *Publisher) cleanupAllMediaMTXSessions() {
+	apiBase := p.cfg.MediaMTXAPIURL
+	if apiBase == "" {
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	webrtcListURL := fmt.Sprintf("%s/v3/webrtcsessions/list", apiBase)
+
+	resp, err := client.Get(webrtcListURL)
+	if err != nil || resp == nil {
+		if err != nil {
+			log.Debug().Err(err).Str("url", webrtcListURL).Msg("Failed to fetch webrtcsessions list")
+		}
+		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil
+		log.Debug().Str("url", webrtcListURL).Int("status", resp.StatusCode).Msg("Non-OK response fetching webrtcsessions list")
+		return
 	}
 
-	s := string(body)
-	idx := 0
-	for {
-		pos := strings.Index(s[idx:], path)
-		if pos < 0 {
-			break
-		}
-		pos += idx
-		idKey := `"id":"`
-		start := strings.LastIndex(s[:pos], idKey)
-		if start >= 0 {
-			start += len(idKey)
-			end := strings.IndexByte(s[start:], '"')
-			if end > 0 {
-				sessionID := s[start : start+end]
-				kickURL := fmt.Sprintf("%s/v3/webrtcsessions/kick/%s", apiBase, sessionID)
-				kickReq, err2 := http.NewRequest(http.MethodPost, kickURL, nil)
-				if err2 == nil {
-					_, _ = http.DefaultClient.Do(kickReq)
-				}
+	var list mediaMTXSessionsList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		log.Warn().Err(err).Msg("Failed to decode webrtcsessions list")
+		return
+	}
+
+	var kicked int
+	for _, item := range list.Items {
+		// limit to sessions that reference "live/" paths to avoid accidental kicks
+		if strings.Contains(item.Path, "live/") {
+			kickURL := fmt.Sprintf("%s/v3/webrtcsessions/kick/%s", apiBase, item.ID)
+			if err := doPostNoBody(client, kickURL); err != nil {
+				log.Warn().Err(err).Str("session_id", item.ID).Msg("Failed to kick WebRTC session during cleanupAll")
+			} else {
+				kicked++
 			}
 		}
-		idx = pos + len(path)
 	}
-	return nil
+
+	log.Info().Int("sessions_cleaned", kicked).Msg("Cleaned up MediaMTX WebRTC sessions")
+}
+
+// helper that POSTs to a kick endpoint with no body (many MediaMTX kick endpoints expect POST)
+func doPostNoBody(client *http.Client, url string) error {
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(nil))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	// Accept 200 OK or 204 No Content as success depending on server
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	// Some deployments may return 201 Created - accept that too
+	if resp.StatusCode == http.StatusCreated {
+		return nil
+	}
+	// otherwise capture body for logging in caller
+	body, _ := io.ReadAll(resp.Body)
+	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 }
 
 // terminateProcess sends SIGTERM to the process group, waits briefly, then SIGKILLs if needed.

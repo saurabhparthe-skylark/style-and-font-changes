@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // CameraStatus represents the camera operational status
 type CameraStatus string
@@ -26,11 +29,26 @@ func (cs CameraStatus) IsValid() bool {
 	}
 }
 
+// ROICoordinates represents ROI (Region of Interest) coordinates
+type ROICoordinates struct {
+	XMin  float64 `json:"x_min"`           // Normalized coordinate 0.0-1.0
+	YMin  float64 `json:"y_min"`           // Normalized coordinate 0.0-1.0
+	XMax  float64 `json:"x_max"`           // Normalized coordinate 0.0-1.0
+	YMax  float64 `json:"y_max"`           // Normalized coordinate 0.0-1.0
+	Color *string `json:"color,omitempty"` // Hex color for ROI display (optional)
+}
+
+// CameraSolution represents an AI solution configuration for the camera
+type CameraSolution struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	ProjectName string `json:"projectName"`
+}
+
 // Camera represents a single camera with its pipeline
 type Camera struct {
 	ID        string
 	URL       string
-	Projects  []string
 	IsActive  bool
 	CreatedAt time.Time
 
@@ -44,6 +62,12 @@ type Camera struct {
 	AIEnabled  bool
 	AIEndpoint string
 	AITimeout  time.Duration
+
+	// Camera Configuration and ROI Data
+	Config          json.RawMessage            `json:"config,omitempty"`   // Camera-specific configuration as JSON
+	CameraSolutions []CameraSolution           `json:"camera_solutions"`   // List of enabled AI solutions
+	Projects        []string                   `json:"projects"`           // List of enabled AI solutions
+	ROIData         map[string]*ROICoordinates `json:"roi_data,omitempty"` // ROI coordinates per solution ID
 
 	// Statistics
 	FrameCount    int64
@@ -112,29 +136,32 @@ type ProcessedFrame struct {
 
 // CameraRequest for API
 type CameraRequest struct {
-	CameraID     string   `json:"camera_id" binding:"required"`
-	URL          string   `json:"url" binding:"required"`
-	Projects     []string `json:"projects"`
-	AIEnabled    *bool    `json:"ai_enabled,omitempty"`    // Optional, defaults to config
-	AIEndpoint   *string  `json:"ai_endpoint,omitempty"`   // Optional, defaults to config
-	EnableRecord *bool    `json:"enable_record,omitempty"` // Whether to enable recording
+	CameraID        string                     `json:"camera_id" binding:"required"`
+	URL             string                     `json:"url" binding:"required"`
+	AIEnabled       *bool                      `json:"ai_enabled,omitempty"`       // Optional, defaults to config
+	AIEndpoint      *string                    `json:"ai_endpoint,omitempty"`      // Optional, defaults to config
+	EnableRecord    *bool                      `json:"enable_record,omitempty"`    // Whether to enable recording
+	Config          json.RawMessage            `json:"config,omitempty"`           // Camera-specific configuration as JSON
+	CameraSolutions []CameraSolution           `json:"camera_solutions,omitempty"` // List of enabled AI solutions
+	ROIData         map[string]*ROICoordinates `json:"roi_data,omitempty"`         // ROI coordinates per solution ID
 }
 
 // CameraUpsertRequest for PUT upsert operation - supports both creation and updates
 type CameraUpsertRequest struct {
-	URL          *string       `json:"url,omitempty"`           // RTSP URL (required for creation, optional for updates)
-	Projects     []string      `json:"projects,omitempty"`      // Project names
-	Status       *CameraStatus `json:"status,omitempty"`        // Camera operational status
-	AIEnabled    *bool         `json:"ai_enabled,omitempty"`    // Optional, defaults to config
-	AIEndpoint   *string       `json:"ai_endpoint,omitempty"`   // Optional, defaults to config
-	EnableRecord *bool         `json:"enable_record,omitempty"` // Whether to enable recording
+	URL             *string                    `json:"url,omitempty"`              // RTSP URL (required for creation, optional for updates)
+	Status          *CameraStatus              `json:"status,omitempty"`           // Camera operational status
+	AIEnabled       *bool                      `json:"ai_enabled,omitempty"`       // Optional, defaults to config
+	AIEndpoint      *string                    `json:"ai_endpoint,omitempty"`      // Optional, defaults to config
+	EnableRecord    *bool                      `json:"enable_record,omitempty"`    // Whether to enable recording
+	Config          json.RawMessage            `json:"config,omitempty"`           // Camera-specific configuration as JSON
+	CameraSolutions []CameraSolution           `json:"camera_solutions,omitempty"` // List of enabled AI solutions
+	ROIData         map[string]*ROICoordinates `json:"roi_data,omitempty"`         // ROI coordinates per solution ID
 }
 
 // CameraResponse for API
 type CameraResponse struct {
 	CameraID      string       `json:"camera_id"`
 	URL           string       `json:"url"`
-	Projects      []string     `json:"projects"`
 	IsActive      bool         `json:"is_active"`
 	Status        CameraStatus `json:"status"`        // Camera operational status
 	IsRecording   bool         `json:"is_recording"`  // Current recording state
@@ -160,6 +187,11 @@ type CameraResponse struct {
 	WebRTCUrl string `json:"webrtc_url"`
 	HLSUrl    string `json:"hls_url"`
 	MJPEGUrl  string `json:"mjpeg_url"`
+
+	// Camera Configuration and ROI Data
+	Config          json.RawMessage            `json:"config,omitempty"`   // Camera-specific configuration as JSON
+	CameraSolutions []CameraSolution           `json:"camera_solutions"`   // List of enabled AI solutions
+	ROIData         map[string]*ROICoordinates `json:"roi_data,omitempty"` // ROI coordinates per solution ID
 }
 
 // RTSPCheckRequest for checking RTSP stream

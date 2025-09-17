@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -327,7 +328,14 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 	}
 }
 
-func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []string, currentFPS float64, currentLatency time.Duration) *models.ProcessedFrame {
+func (fp *FrameProcessor) ProcessFrame(
+	rawFrame *models.RawFrame,
+	projects []string,
+	ai_solutions []models.CameraSolution,
+	roi_data map[string]*models.ROICoordinates,
+	currentFPS float64,
+	currentLatency time.Duration,
+) *models.ProcessedFrame {
 	// STREAM-FIRST: Always create a valid processed frame, AI can fail but stream continues
 	defer func() {
 		if r := recover(); r != nil {
@@ -406,7 +414,7 @@ func (fp *FrameProcessor) ProcessFrame(rawFrame *models.RawFrame, projects []str
 
 	processedFrame.AIDetections = aiResult
 
-	fp.addOverlay(processedFrame, aiResult, projects)
+	fp.addOverlay(processedFrame, aiResult, projects, ai_solutions, roi_data, aiEnabled)
 
 	return processedFrame
 }
@@ -614,7 +622,7 @@ func (fp *FrameProcessor) convertProtoToModels(det *pb.Detection, projectName st
 	return modelDet
 }
 
-func (fp *FrameProcessor) addOverlay(processedFrame *models.ProcessedFrame, aiResult *models.AIProcessingResult, projects []string) {
+func (fp *FrameProcessor) addOverlay(processedFrame *models.ProcessedFrame, aiResult *models.AIProcessingResult, projects []string, ai_solutions []models.CameraSolution, roi_data map[string]*models.ROICoordinates, ai_enabled bool) {
 	mat, err := gocv.NewMatFromBytes(processedFrame.Height, processedFrame.Width, gocv.MatTypeCV8UC3, processedFrame.Data)
 	if err != nil {
 		log.Error().Err(err).Str("camera_id", processedFrame.CameraID).Msg("Failed to create Mat from frame data")
@@ -633,23 +641,228 @@ func (fp *FrameProcessor) addOverlay(processedFrame *models.ProcessedFrame, aiRe
 			drawer.DrawDetections(&mat, dets)
 		}
 	}
-
-	// Draw solution overlays based on camera projects
-	var projectsToUse []string
-	if fp.camera != nil && len(fp.camera.Projects) > 0 {
-		projectsToUse = fp.camera.Projects
-	} else {
-		projectsToUse = projects
+	if len(projects) > 0 {
+		drawSolutionOverlays(&mat, projects, aiResult.Solutions, aiResult.Detections)
 	}
 
-	if len(projectsToUse) > 0 {
-		drawSolutionOverlays(&mat, projectsToUse, aiResult.Solutions, aiResult.Detections)
-	}
+	// if len(roi_data && ai_enabled) > 0 {
+	// 	drawRoiOverlays(&mat, roi_data, ai_solutions)
+	// }
 
 	if fp.cfg != nil && fp.cfg.ShowMetadata {
 		drawStatsOverlay(&mat, processedFrame, aiResult, fp.cfg)
 	}
 	processedFrame.Data = mat.ToBytes()
+}
+
+func drawRoiOverlays(mat *gocv.Mat, roi_data map[string]*models.ROICoordinates, ai_solutions []models.CameraSolution) {
+	if mat == nil || len(roi_data) == 0 {
+		return
+	}
+
+	// Create a map of solution ID to solution for quick lookup
+	solutionMap := make(map[string]models.CameraSolution)
+	for _, solution := range ai_solutions {
+		solutionMap[solution.ID] = solution
+	}
+
+	frameWidth := float64(mat.Cols())
+	frameHeight := float64(mat.Rows())
+
+	// Default colors if ROI doesn't have one
+	defaultColors := []color.RGBA{
+		{30, 144, 255, 255}, // DodgerBlue
+		{255, 20, 147, 255}, // DeepPink
+		{255, 165, 0, 255},  // Orange
+		{50, 205, 50, 255},  // LimeGreen
+		{138, 43, 226, 255}, // BlueViolet
+		{255, 69, 0, 255},   // OrangeRed
+		{0, 191, 255, 255},  // DeepSkyBlue
+		{255, 140, 0, 255},  // DarkOrange
+		{124, 252, 0, 255},  // LawnGreen
+		{186, 85, 211, 255}, // MediumOrchid
+	}
+	colorIndex := 0
+
+	for solutionID, roiCoords := range roi_data {
+		if roiCoords == nil {
+			continue
+		}
+
+		// Get solution info
+		solution, solutionExists := solutionMap[solutionID]
+		solutionName := solutionID // fallback to ID
+		if solutionExists && solution.Name != "" {
+			solutionName = solution.Name
+		} else if solutionExists && solution.ProjectName != "" {
+			solutionName = solution.ProjectName
+		}
+
+		// Convert normalized coordinates to pixel coordinates
+		x1 := int(roiCoords.XMin * frameWidth)
+		y1 := int(roiCoords.YMin * frameHeight)
+		x2 := int(roiCoords.XMax * frameWidth)
+		y2 := int(roiCoords.YMax * frameHeight)
+
+		// Ensure coordinates are within frame bounds
+		x1 = max(0, min(x1, int(frameWidth)-1))
+		y1 = max(0, min(y1, int(frameHeight)-1))
+		x2 = max(0, min(x2, int(frameWidth)-1))
+		y2 = max(0, min(y2, int(frameHeight)-1))
+
+		// Parse ROI color or use default
+		roiColor := defaultColors[colorIndex%len(defaultColors)]
+		if roiCoords.Color != nil && *roiCoords.Color != "" {
+			if parsedColor, err := parseHexColor(*roiCoords.Color); err == nil {
+				roiColor = parsedColor
+			}
+		}
+		colorIndex++
+
+		// Create transparent overlay using alpha blending
+		// Create a temporary mat for the overlay
+		overlay := gocv.NewMatWithSize(mat.Rows(), mat.Cols(), gocv.MatTypeCV8UC3)
+		defer overlay.Close()
+
+		// Fill the overlay with the ROI color
+		solidColor := color.RGBA{roiColor.R, roiColor.G, roiColor.B, 255}
+		gocv.Rectangle(&overlay, image.Rect(x1, y1, x2, y2), solidColor, -1)
+
+		// Blend the overlay with the original frame using alpha blending (10% opacity)
+		alpha := 0.1 // 10% opacity
+		gocv.AddWeighted(*mat, 1.0-alpha, overlay, alpha, 0, mat)
+
+		// Draw ROI border with dashed lines
+		drawDashedRectangle(mat, image.Pt(x1, y1), image.Pt(x2, y2), roiColor, 3, 12, 8)
+
+		// Draw corner handles (small squares at corners)
+		handleSize := 12
+		handleColor := color.RGBA{roiColor.R, roiColor.G, roiColor.B, 255}
+
+		// Top-left handle
+		gocv.Rectangle(mat, image.Rect(x1-handleSize/2, y1-handleSize/2, x1+handleSize/2, y1+handleSize/2), handleColor, -1)
+		// Top-right handle
+		gocv.Rectangle(mat, image.Rect(x2-handleSize/2, y1-handleSize/2, x2+handleSize/2, y1+handleSize/2), handleColor, -1)
+		// Bottom-left handle
+		gocv.Rectangle(mat, image.Rect(x1-handleSize/2, y2-handleSize/2, x1+handleSize/2, y2+handleSize/2), handleColor, -1)
+		// Bottom-right handle
+		gocv.Rectangle(mat, image.Rect(x2-handleSize/2, y2-handleSize/2, x2+handleSize/2, y2+handleSize/2), handleColor, -1)
+
+		// Draw solution name label with background
+		if solutionName != "" {
+			fontSize := 0.7
+			thickness := 2
+			fontFace := gocv.FontHersheyDuplex
+
+			// Get text size
+			textSize := gocv.GetTextSize(solutionName, fontFace, fontSize, thickness)
+			textWidth := textSize.X
+			textHeight := textSize.Y
+
+			// Position label at top-left of ROI with some padding
+			labelX := x1 + 8
+			labelY := y1 - 8
+
+			// Ensure label stays within frame
+			if labelY-textHeight-8 < 0 {
+				labelY = y1 + textHeight + 16 // Move below ROI if no space above
+			}
+			if labelX+textWidth+16 > int(frameWidth) {
+				labelX = int(frameWidth) - textWidth - 16 // Move left if no space on right
+			}
+
+			// Draw label background with rounded corners effect
+			bgPadding := 6
+			labelBg := color.RGBA{roiColor.R, roiColor.G, roiColor.B, 200}
+			gocv.Rectangle(mat,
+				image.Rect(labelX-bgPadding, labelY-textHeight-bgPadding, labelX+textWidth+bgPadding, labelY+bgPadding),
+				labelBg, -1)
+
+			// Draw label border
+			borderColor := color.RGBA{255, 255, 255, 180}
+			gocv.Rectangle(mat,
+				image.Rect(labelX-bgPadding, labelY-textHeight-bgPadding, labelX+textWidth+bgPadding, labelY+bgPadding),
+				borderColor, 1)
+
+			// Draw text in white for good contrast
+			textColor := color.RGBA{255, 255, 255, 255}
+			gocv.PutText(mat, solutionName, image.Pt(labelX, labelY-2), fontFace, fontSize, textColor, thickness)
+		}
+
+		// Draw ROI info (coordinates) at bottom-right corner
+		coordText := fmt.Sprintf("ROI: %.1f%%, %.1f%% - %.1f%%, %.1f%%",
+			roiCoords.XMin*100, roiCoords.YMin*100, roiCoords.XMax*100, roiCoords.YMax*100)
+
+		fontSize := 0.5
+		thickness := 1
+		fontFace := gocv.FontHersheyDuplex
+		textSize := gocv.GetTextSize(coordText, fontFace, fontSize, thickness)
+
+		// Position at bottom-right of ROI
+		coordX := x2 - textSize.X - 8
+		coordY := y2 - 8
+
+		// Ensure coordinates stay within frame
+		if coordX < 0 {
+			coordX = x1 + 8
+		}
+		if coordY > int(frameHeight)-textSize.Y {
+			coordY = y2 - textSize.Y - 8
+		}
+
+		// Draw coordinate background
+		bgPadding := 4
+		coordBg := color.RGBA{0, 0, 0, 150}
+		gocv.Rectangle(mat,
+			image.Rect(coordX-bgPadding, coordY-textSize.Y-bgPadding, coordX+textSize.X+bgPadding, coordY+bgPadding),
+			coordBg, -1)
+
+		// Draw coordinate text
+		coordColor := color.RGBA{255, 255, 255, 200}
+		gocv.PutText(mat, coordText, image.Pt(coordX, coordY-2), fontFace, fontSize, coordColor, thickness)
+	}
+}
+
+// Helper function to draw dashed rectangle
+func drawDashedRectangle(mat *gocv.Mat, pt1, pt2 image.Point, clr color.RGBA, thickness, dashLength, gapLength int) {
+	// Top edge
+	drawDashedLine(mat, pt1, image.Pt(pt2.X, pt1.Y), clr, thickness, dashLength, gapLength)
+	// Right edge
+	drawDashedLine(mat, image.Pt(pt2.X, pt1.Y), pt2, clr, thickness, dashLength, gapLength)
+	// Bottom edge
+	drawDashedLine(mat, pt2, image.Pt(pt1.X, pt2.Y), clr, thickness, dashLength, gapLength)
+	// Left edge
+	drawDashedLine(mat, image.Pt(pt1.X, pt2.Y), pt1, clr, thickness, dashLength, gapLength)
+}
+
+// Helper function to draw dashed line
+func drawDashedLine(mat *gocv.Mat, pt1, pt2 image.Point, clr color.RGBA, thickness, dashLength, gapLength int) {
+	dx := pt2.X - pt1.X
+	dy := pt2.Y - pt1.Y
+	length := int(math.Sqrt(float64(dx*dx + dy*dy)))
+
+	if length == 0 {
+		return
+	}
+
+	unitX := float64(dx) / float64(length)
+	unitY := float64(dy) / float64(length)
+
+	totalDash := dashLength + gapLength
+	currentPos := 0
+
+	for currentPos < length {
+		dashEnd := min(currentPos+dashLength, length)
+
+		startX := pt1.X + int(float64(currentPos)*unitX)
+		startY := pt1.Y + int(float64(currentPos)*unitY)
+		endX := pt1.X + int(float64(dashEnd)*unitX)
+		endY := pt1.Y + int(float64(dashEnd)*unitY)
+
+		gocv.Line(mat, image.Pt(startX, startY), image.Pt(endX, endY), clr, thickness)
+
+		currentPos += totalDash
+	}
 }
 
 func drawStatsOverlay(mat *gocv.Mat, frame *models.ProcessedFrame, aiResult *models.AIProcessingResult, cfg *config.Config) {

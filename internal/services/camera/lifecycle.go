@@ -454,7 +454,7 @@ func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
 				}
 			}()
 
-			processedFrame = processor.ProcessFrame(rawFrame, cl.camera.Projects, cl.camera.FPS, cl.camera.Latency)
+			processedFrame = processor.ProcessFrame(rawFrame, cl.camera.Projects, cl.camera.CameraSolutions, cl.camera.ROIData, cl.camera.FPS, cl.camera.Latency)
 		}()
 
 		aiProcessingDuration := time.Since(aiStartTime)

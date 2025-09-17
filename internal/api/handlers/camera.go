@@ -101,7 +101,7 @@ func (h *CameraHandler) StartCamera(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Camera started but failed to get details"})
 		return
 	}
-	log.Info().Str("camera_id", req.CameraID).Str("url", req.URL).Strs("projects", req.Projects).Msg("camera_started")
+	log.Info().Str("camera_id", req.CameraID).Str("url", req.URL).Interface("projects", req.CameraSolutions).Msg("camera_started")
 	c.JSON(http.StatusOK, camera)
 }
 
@@ -177,12 +177,12 @@ func (h *CameraHandler) UpsertCamera(c *gin.Context) {
 
 		// Convert CameraUpsertRequest to CameraRequest for creation
 		createReq := models.CameraRequest{
-			CameraID:     cameraID,
-			URL:          *req.URL,
-			Projects:     req.Projects,
-			EnableRecord: req.EnableRecord,
-			AIEnabled:    req.AIEnabled,
-			AIEndpoint:   req.AIEndpoint,
+			CameraID:        cameraID,
+			URL:             *req.URL,
+			CameraSolutions: req.CameraSolutions,
+			EnableRecord:    req.EnableRecord,
+			AIEnabled:       req.AIEnabled,
+			AIEndpoint:      req.AIEndpoint,
 		}
 
 		// Create the camera
