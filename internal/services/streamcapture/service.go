@@ -321,11 +321,10 @@ func (s *Service) CalculateBackoffDelay(attempt int) time.Duration {
 }
 
 // configureFFmpegOptions sets comprehensive FFmpeg options via environment variables
-// This matches the configuration from the Python stream_handler.py implementation
 func (s *Service) configureFFmpegOptions() {
 	log.Info().Msg("Configuring comprehensive FFmpeg options for OpenCV")
 
-	// FFmpeg options optimized for RTSP streaming (matching Python implementation)
+	// FFmpeg options optimized for RTSP streaming
 	ffmpegOptions := map[string]string{
 		"rtsp_transport":        "tcp",     // Use TCP for more reliable connection
 		"buffer_size":           "2097152", // 2MB buffer - smaller for real-time
@@ -335,7 +334,7 @@ func (s *Service) configureFFmpegOptions() {
 		"threads":               "1",       // Single thread
 		"thread_type":           "slice",
 		"flags":                 "low_delay",
-		"fflags":                "nobuffer+flush_packets",
+		"fflags":                "nobuffer+flush_packets+discardcorrupt",
 		"sync":                  "ext",
 		"drop_pkts_on_overflow": "1",
 		"max_error_rate":        "0.1",
