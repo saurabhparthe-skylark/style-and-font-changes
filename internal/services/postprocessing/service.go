@@ -525,24 +525,6 @@ func (s *Service) getDetectionType(projectName, label string) models.DetectionTy
 		// 	return models.DetectionTypePerson
 	}
 
-	// Label based mapping (secondary)
-	// switch {
-	// case strings.Contains(labelLower, "ppe") || strings.Contains(labelLower, "helmet") || strings.Contains(labelLower, "vest"):
-	// 	return models.DetectionTypePPE
-	// case strings.Contains(labelLower, "phone") || strings.Contains(labelLower, "cellphone"):
-	// 	return models.DetectionTypeCellphone
-	// case strings.Contains(labelLower, "drone") || strings.Contains(labelLower, "aircraft") || strings.Contains(labelLower, "quadcopter"):
-	// 	return models.DetectionTypeDrone
-	// case strings.Contains(labelLower, "car") || strings.Contains(labelLower, "truck") || strings.Contains(labelLower, "bus") || strings.Contains(labelLower, "motorcycle") || strings.Contains(labelLower, "bike") || strings.Contains(labelLower, "scooter") || strings.Contains(labelLower, "van") || strings.Contains(labelLower, "vehicle"):
-	// 	return models.DetectionTypeVehicle
-	// case strings.Contains(labelLower, "fire") || strings.Contains(labelLower, "smoke"):
-	// 	return models.DetectionTypeFireSmoke
-	// case strings.Contains(labelLower, "person") || strings.Contains(labelLower, "people"):
-	// 	return models.DetectionTypePerson
-	// default:
-	// 	return models.DetectionTypeGeneral
-	// }
-
 	return models.DetectionTypeGeneral
 }
 

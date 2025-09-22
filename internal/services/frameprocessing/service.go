@@ -249,42 +249,61 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 		// cornerLength := 15
 		// cornerThickness := 3
 
-		// Adaptive thickness based on object size and type
+		// Premium adaptive thickness based on object size and type
 		boxWidth := x2 - x1
 		boxHeight := y2 - y1
 		boxArea := boxWidth * boxHeight
 
-		var thickness, cornerThickness int
+		var thickness int
+		var useCorners bool
 		var cornerLength int
 
-		// Smaller objects like license plates get thinner borders
+		// Crisp, sharp borders - no blurry 1px lines
 		if det.Label == "license_plate" || det.Label == "numberplate" {
-			thickness = 1
-			cornerThickness = 1
+			thickness = 2      // Crisp thin border
+			useCorners = false // No corners for very small objects
+		} else if det.Label == "face" || boxArea < 1500 { // Very small objects
+			thickness = 2      // Crisp thin border
+			useCorners = false // No corners to avoid hashtag effect
+		} else if boxArea < 5000 { // Small objects
+			thickness = 2 // Crisp thin border
+			useCorners = true
+			cornerLength = 6 // Very subtle corners
+		} else if boxArea < 15000 { // Medium objects
+			thickness = 2 // Crisp thin border
+			useCorners = true
 			cornerLength = 8
-		} else if det.Label == "face" || boxArea < 2000 { // Small objects
-			thickness = 1
-			cornerThickness = 2
-			cornerLength = 10
-		} else if boxArea < 10000 { // Medium objects
-			thickness = 2
-			cornerThickness = 2
-			cornerLength = 12
 		} else { // Large objects
-			thickness = 2
-			cornerThickness = 3
-			cornerLength = 15
+			thickness = 3 // Slightly thicker for large objects
+			useCorners = true
+			cornerLength = 10
 		}
 
+		// Draw main rectangle with thin, elegant border
 		gocv.Rectangle(mat, image.Rect(x1, y1, x2, y2), detColor, thickness)
-		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1+cornerLength, y1), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1, y1+cornerLength), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2-cornerLength, y1), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2, y1+cornerLength), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1+cornerLength, y2), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1, y2-cornerLength), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2-cornerLength, y2), detColor, cornerThickness)
-		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2, y2-cornerLength), detColor, cornerThickness)
+
+		// Draw subtle corner accents only for medium/large objects
+		if useCorners && cornerLength > 0 {
+			// Make corners crisp and sharp - no blurry 1px lines
+			cornerThickness := 2
+
+			// Ensure corners don't extend too far on small boxes
+			maxCornerLength := min(cornerLength, min(boxWidth/4, boxHeight/4))
+			if maxCornerLength >= 3 { // Only draw if meaningful size
+				// Top-left corner
+				gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1+maxCornerLength, y1), detColor, cornerThickness)
+				gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1, y1+maxCornerLength), detColor, cornerThickness)
+				// Top-right corner
+				gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2-maxCornerLength, y1), detColor, cornerThickness)
+				gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2, y1+maxCornerLength), detColor, cornerThickness)
+				// Bottom-left corner
+				gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1+maxCornerLength, y2), detColor, cornerThickness)
+				gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1, y2-maxCornerLength), detColor, cornerThickness)
+				// Bottom-right corner
+				gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2-maxCornerLength, y2), detColor, cornerThickness)
+				gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2, y2-maxCornerLength), detColor, cornerThickness)
+			}
+		}
 	}
 }
 
