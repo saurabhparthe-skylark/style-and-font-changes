@@ -468,7 +468,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
-	log.Info().Msgf("AI request: %v %v", req.ProjectNames, req.CameraId)
+	// log.Info().Msgf("AI request: %v %v", req.ProjectNames, req.CameraId)
 
 	resp, err := fp.grpcClient.InferDetection(ctx, req)
 	if err != nil {
