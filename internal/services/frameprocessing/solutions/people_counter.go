@@ -25,7 +25,7 @@ func DrawPeopleCounter(mat *gocv.Mat, solution models.SolutionResults, y *int) {
 	currentText := fmt.Sprintf("Current: %d", solution.PeopleCurrentCount)
 	currentColor := getPeopleCountColor(solution.PeopleCurrentCount)
 	DrawTextEnhanced(mat, currentText, 15, *y, currentColor, 0.75, 2)
-	// *y += 32
+	*y += 32
 
 	// Peak count with golden color
 	// maxText := fmt.Sprintf("Peak: %d", solution.PeopleMaxCount)
