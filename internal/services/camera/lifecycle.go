@@ -334,12 +334,12 @@ func (cl *CameraLifecycle) runCamera() {
 				log.Error().
 					Err(err).
 					Str("camera_id", cl.camera.ID).
-					Msg("Video capture failed, retrying")
+					Msg("Video capture ended; attempting quick reconnect")
 
 				cl.camera.ErrorCount++
-				delay := time.Duration(cl.camera.ErrorCount) * time.Second
-				if delay > 10*time.Second {
-					delay = 10 * time.Second
+				delay := cl.cm.cfg.ReconnectInterval
+				if delay <= 0 {
+					delay = 500 * time.Millisecond
 				}
 
 				select {

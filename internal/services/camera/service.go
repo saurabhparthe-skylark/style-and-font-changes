@@ -451,10 +451,19 @@ func (cm *CameraManager) UpdateCameraSettings(cameraID string, req *models.Camer
 	// Update camera solutions (no restart needed - can be changed dynamically)
 	if req.CameraSolutions != nil {
 		camera.CameraSolutions = req.CameraSolutions
+		// Also keep derived projects in sync for AI routing and overlays
+		projects := make([]string, 0, len(req.CameraSolutions))
+		for _, solution := range req.CameraSolutions {
+			if solution.ProjectName != "" {
+				projects = append(projects, solution.ProjectName)
+			}
+		}
+		camera.Projects = projects
 		log.Info().
 			Str("camera_id", cameraID).
 			Int("solution_count", len(req.CameraSolutions)).
-			Msg("Camera solutions updated dynamically")
+			Int("project_count", len(projects)).
+			Msg("Camera solutions updated dynamically and projects synchronized")
 	}
 
 	// Update ROI data (no restart needed)

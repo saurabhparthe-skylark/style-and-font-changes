@@ -613,7 +613,6 @@ type ProjectDetections struct {
 	SecondaryDetections []*Detection               `protobuf:"bytes,2,rep,name=secondary_detections,json=secondaryDetections,proto3" json:"secondary_detections,omitempty"`
 	TertiaryDetections  []*Detection               `protobuf:"bytes,3,rep,name=tertiary_detections,json=tertiaryDetections,proto3" json:"tertiary_detections,omitempty"`
 	Solutions           map[string]*SolutionResult `protobuf:"bytes,4,rep,name=solutions,proto3" json:"solutions,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	ModelMap            map[string]string          `protobuf:"bytes,5,rep,name=model_map,json=modelMap,proto3" json:"model_map,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -676,13 +675,6 @@ func (x *ProjectDetections) GetSolutions() map[string]*SolutionResult {
 	return nil
 }
 
-func (x *ProjectDetections) GetModelMap() map[string]string {
-	if x != nil {
-		return x.ModelMap
-	}
-	return nil
-}
-
 // Single detection result
 type Detection struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
@@ -706,6 +698,8 @@ type Detection struct {
 	HasGlasses *bool    `protobuf:"varint,14,opt,name=has_glasses,json=hasGlasses,proto3,oneof" json:"has_glasses,omitempty"`
 	Violations []string `protobuf:"bytes,15,rep,name=violations,proto3" json:"violations,omitempty"`
 	PpeItems   []string `protobuf:"bytes,16,rep,name=ppe_items,json=ppeItems,proto3" json:"ppe_items,omitempty"`
+	// Bike Helmet Detection (separate from PPE)
+	HasBikeHelmet *bool `protobuf:"varint,29,opt,name=has_bike_helmet,json=hasBikeHelmet,proto3,oneof" json:"has_bike_helmet,omitempty"`
 	// Intrusion Alerts
 	IsIntrusion *bool `protobuf:"varint,17,opt,name=is_intrusion,json=isIntrusion,proto3,oneof" json:"is_intrusion,omitempty"`
 	// Numberplate Recognition
@@ -887,6 +881,13 @@ func (x *Detection) GetPpeItems() []string {
 		return x.PpeItems
 	}
 	return nil
+}
+
+func (x *Detection) GetHasBikeHelmet() bool {
+	if x != nil && x.HasBikeHelmet != nil {
+		return *x.HasBikeHelmet
+	}
+	return false
 }
 
 func (x *Detection) GetIsIntrusion() bool {
@@ -1673,19 +1674,15 @@ const file_proto_detection_proto_rawDesc = "" +
 	"\aresults\x18\x01 \x03(\v2).detection.DetectionResponse.ResultsEntryR\aresults\x1aX\n" +
 	"\fResultsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x122\n" +
-	"\x05value\x18\x02 \x01(\v2\x1c.detection.ProjectDetectionsR\x05value:\x028\x01\"\x92\x04\n" +
+	"\x05value\x18\x02 \x01(\v2\x1c.detection.ProjectDetectionsR\x05value:\x028\x01\"\x8c\x03\n" +
 	"\x11ProjectDetections\x12C\n" +
 	"\x12primary_detections\x18\x01 \x03(\v2\x14.detection.DetectionR\x11primaryDetections\x12G\n" +
 	"\x14secondary_detections\x18\x02 \x03(\v2\x14.detection.DetectionR\x13secondaryDetections\x12E\n" +
 	"\x13tertiary_detections\x18\x03 \x03(\v2\x14.detection.DetectionR\x12tertiaryDetections\x12I\n" +
-	"\tsolutions\x18\x04 \x03(\v2+.detection.ProjectDetections.SolutionsEntryR\tsolutions\x12G\n" +
-	"\tmodel_map\x18\x05 \x03(\v2*.detection.ProjectDetections.ModelMapEntryR\bmodelMap\x1aW\n" +
+	"\tsolutions\x18\x04 \x03(\v2+.detection.ProjectDetections.SolutionsEntryR\tsolutions\x1aW\n" +
 	"\x0eSolutionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12/\n" +
-	"\x05value\x18\x02 \x01(\v2\x19.detection.SolutionResultR\x05value:\x028\x01\x1a;\n" +
-	"\rModelMapEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xab\t\n" +
+	"\x05value\x18\x02 \x01(\v2\x19.detection.SolutionResultR\x05value:\x028\x01\"\xec\t\n" +
 	"\tDetection\x12\x12\n" +
 	"\x04bbox\x18\x01 \x03(\x02R\x04bbox\x12\x1e\n" +
 	"\n" +
@@ -1717,25 +1714,27 @@ const file_proto_detection_proto_rawDesc = "" +
 	"\n" +
 	"violations\x18\x0f \x03(\tR\n" +
 	"violations\x12\x1b\n" +
-	"\tppe_items\x18\x10 \x03(\tR\bppeItems\x12&\n" +
-	"\fis_intrusion\x18\x11 \x01(\bH\aR\visIntrusion\x88\x01\x01\x12\x19\n" +
-	"\x05plate\x18\x12 \x01(\tH\bR\x05plate\x88\x01\x01\x12\x19\n" +
-	"\x05color\x18\x13 \x01(\tH\tR\x05color\x88\x01\x01\x12\x1b\n" +
-	"\x06gender\x18\x14 \x01(\tH\n" +
-	"R\x06gender\x88\x01\x01\x12&\n" +
-	"\fis_loitering\x18\x15 \x01(\bH\vR\visLoitering\x88\x01\x01\x12)\n" +
-	"\x0etime_in_region\x18\x16 \x01(\x02H\fR\ftimeInRegion\x88\x01\x01\x12$\n" +
-	"\vvessel_type\x18\x17 \x01(\tH\rR\n" +
+	"\tppe_items\x18\x10 \x03(\tR\bppeItems\x12+\n" +
+	"\x0fhas_bike_helmet\x18\x1d \x01(\bH\aR\rhasBikeHelmet\x88\x01\x01\x12&\n" +
+	"\fis_intrusion\x18\x11 \x01(\bH\bR\visIntrusion\x88\x01\x01\x12\x19\n" +
+	"\x05plate\x18\x12 \x01(\tH\tR\x05plate\x88\x01\x01\x12\x19\n" +
+	"\x05color\x18\x13 \x01(\tH\n" +
+	"R\x05color\x88\x01\x01\x12\x1b\n" +
+	"\x06gender\x18\x14 \x01(\tH\vR\x06gender\x88\x01\x01\x12&\n" +
+	"\fis_loitering\x18\x15 \x01(\bH\fR\visLoitering\x88\x01\x01\x12)\n" +
+	"\x0etime_in_region\x18\x16 \x01(\x02H\rR\ftimeInRegion\x88\x01\x01\x12$\n" +
+	"\vvessel_type\x18\x17 \x01(\tH\x0eR\n" +
 	"vesselType\x88\x01\x01\x12*\n" +
-	"\x0erecognition_id\x18\x18 \x01(\tH\x0eR\rrecognitionId\x88\x01\x01\x120\n" +
-	"\x11recognition_score\x18\x19 \x01(\x02H\x0fR\x10recognitionScore\x88\x01\x01B\x10\n" +
+	"\x0erecognition_id\x18\x18 \x01(\tH\x0fR\rrecognitionId\x88\x01\x01\x120\n" +
+	"\x11recognition_score\x18\x19 \x01(\x02H\x10R\x10recognitionScore\x88\x01\x01B\x10\n" +
 	"\x0e_true_match_idB\v\n" +
 	"\t_has_vestB\r\n" +
 	"\v_has_helmetB\v\n" +
 	"\t_has_headB\r\n" +
 	"\v_complianceB\r\n" +
 	"\v_has_glovesB\x0e\n" +
-	"\f_has_glassesB\x0f\n" +
+	"\f_has_glassesB\x12\n" +
+	"\x10_has_bike_helmetB\x0f\n" +
 	"\r_is_intrusionB\b\n" +
 	"\x06_plateB\b\n" +
 	"\x06_colorB\t\n" +
@@ -1835,7 +1834,7 @@ func file_proto_detection_proto_rawDescGZIP() []byte {
 	return file_proto_detection_proto_rawDescData
 }
 
-var file_proto_detection_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_proto_detection_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_proto_detection_proto_goTypes = []any{
 	(*Empty)(nil),                      // 0: detection.Empty
 	(*CameraIdRequest)(nil),            // 1: detection.CameraIdRequest
@@ -1861,8 +1860,7 @@ var file_proto_detection_proto_goTypes = []any{
 	(*ToggleResponse)(nil),             // 21: detection.ToggleResponse
 	nil,                                // 22: detection.DetectionResponse.ResultsEntry
 	nil,                                // 23: detection.ProjectDetections.SolutionsEntry
-	nil,                                // 24: detection.ProjectDetections.ModelMapEntry
-	nil,                                // 25: detection.SolutionResult.ValidatedPlatesEntry
+	nil,                                // 24: detection.SolutionResult.ValidatedPlatesEntry
 }
 var file_proto_detection_proto_depIdxs = []int32{
 	7,  // 0: detection.SolutionROIRequest.roi_pts:type_name -> detection.point
@@ -1871,40 +1869,39 @@ var file_proto_detection_proto_depIdxs = []int32{
 	11, // 3: detection.ProjectDetections.secondary_detections:type_name -> detection.Detection
 	11, // 4: detection.ProjectDetections.tertiary_detections:type_name -> detection.Detection
 	23, // 5: detection.ProjectDetections.solutions:type_name -> detection.ProjectDetections.SolutionsEntry
-	24, // 6: detection.ProjectDetections.model_map:type_name -> detection.ProjectDetections.ModelMapEntry
-	12, // 7: detection.CrowdDetectionResult.crowds:type_name -> detection.CrowdInfo
-	25, // 8: detection.SolutionResult.validated_plates:type_name -> detection.SolutionResult.ValidatedPlatesEntry
-	15, // 9: detection.SolutionResult.clothing_colors:type_name -> detection.ColorResult
-	13, // 10: detection.SolutionResult.crowd_detection:type_name -> detection.CrowdDetectionResult
-	10, // 11: detection.DetectionResponse.ResultsEntry.value:type_name -> detection.ProjectDetections
-	14, // 12: detection.ProjectDetections.SolutionsEntry.value:type_name -> detection.SolutionResult
-	2,  // 13: detection.DetectionService.InferDetection:input_type -> detection.FrameRequest
-	3,  // 14: detection.DetectionService.SaveFalseDetection:input_type -> detection.ROIRequest
-	4,  // 15: detection.DetectionService.RemoveFalseDetection:input_type -> detection.RemoveROIRequest
-	5,  // 16: detection.DetectionService.SaveTrueDetection:input_type -> detection.TrueDetectionRequest
-	6,  // 17: detection.DetectionService.RemoveTrueDetection:input_type -> detection.RemoveTrueDetectionRequest
-	20, // 18: detection.DetectionService.ToggleMode:input_type -> detection.ToggleRequest
-	0,  // 19: detection.DetectionService.HealthCheck:input_type -> detection.Empty
-	0,  // 20: detection.DetectionService.GetActivePipelines:input_type -> detection.Empty
-	1,  // 21: detection.DetectionService.RemovePipelines:input_type -> detection.CameraIdRequest
-	8,  // 22: detection.DetectionService.SetROI:input_type -> detection.SolutionROIRequest
-	19, // 23: detection.DetectionService.AddFace:input_type -> detection.AddFaceRequest
-	9,  // 24: detection.DetectionService.InferDetection:output_type -> detection.DetectionResponse
-	16, // 25: detection.DetectionService.SaveFalseDetection:output_type -> detection.StatusResponse
-	16, // 26: detection.DetectionService.RemoveFalseDetection:output_type -> detection.StatusResponse
-	16, // 27: detection.DetectionService.SaveTrueDetection:output_type -> detection.StatusResponse
-	16, // 28: detection.DetectionService.RemoveTrueDetection:output_type -> detection.StatusResponse
-	21, // 29: detection.DetectionService.ToggleMode:output_type -> detection.ToggleResponse
-	17, // 30: detection.DetectionService.HealthCheck:output_type -> detection.HealthResponse
-	18, // 31: detection.DetectionService.GetActivePipelines:output_type -> detection.PipelinesResponse
-	16, // 32: detection.DetectionService.RemovePipelines:output_type -> detection.StatusResponse
-	16, // 33: detection.DetectionService.SetROI:output_type -> detection.StatusResponse
-	16, // 34: detection.DetectionService.AddFace:output_type -> detection.StatusResponse
-	24, // [24:35] is the sub-list for method output_type
-	13, // [13:24] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	12, // 6: detection.CrowdDetectionResult.crowds:type_name -> detection.CrowdInfo
+	24, // 7: detection.SolutionResult.validated_plates:type_name -> detection.SolutionResult.ValidatedPlatesEntry
+	15, // 8: detection.SolutionResult.clothing_colors:type_name -> detection.ColorResult
+	13, // 9: detection.SolutionResult.crowd_detection:type_name -> detection.CrowdDetectionResult
+	10, // 10: detection.DetectionResponse.ResultsEntry.value:type_name -> detection.ProjectDetections
+	14, // 11: detection.ProjectDetections.SolutionsEntry.value:type_name -> detection.SolutionResult
+	2,  // 12: detection.DetectionService.InferDetection:input_type -> detection.FrameRequest
+	3,  // 13: detection.DetectionService.SaveFalseDetection:input_type -> detection.ROIRequest
+	4,  // 14: detection.DetectionService.RemoveFalseDetection:input_type -> detection.RemoveROIRequest
+	5,  // 15: detection.DetectionService.SaveTrueDetection:input_type -> detection.TrueDetectionRequest
+	6,  // 16: detection.DetectionService.RemoveTrueDetection:input_type -> detection.RemoveTrueDetectionRequest
+	20, // 17: detection.DetectionService.ToggleMode:input_type -> detection.ToggleRequest
+	0,  // 18: detection.DetectionService.HealthCheck:input_type -> detection.Empty
+	0,  // 19: detection.DetectionService.GetActivePipelines:input_type -> detection.Empty
+	1,  // 20: detection.DetectionService.RemovePipelines:input_type -> detection.CameraIdRequest
+	8,  // 21: detection.DetectionService.SetROI:input_type -> detection.SolutionROIRequest
+	19, // 22: detection.DetectionService.AddFace:input_type -> detection.AddFaceRequest
+	9,  // 23: detection.DetectionService.InferDetection:output_type -> detection.DetectionResponse
+	16, // 24: detection.DetectionService.SaveFalseDetection:output_type -> detection.StatusResponse
+	16, // 25: detection.DetectionService.RemoveFalseDetection:output_type -> detection.StatusResponse
+	16, // 26: detection.DetectionService.SaveTrueDetection:output_type -> detection.StatusResponse
+	16, // 27: detection.DetectionService.RemoveTrueDetection:output_type -> detection.StatusResponse
+	21, // 28: detection.DetectionService.ToggleMode:output_type -> detection.ToggleResponse
+	17, // 29: detection.DetectionService.HealthCheck:output_type -> detection.HealthResponse
+	18, // 30: detection.DetectionService.GetActivePipelines:output_type -> detection.PipelinesResponse
+	16, // 31: detection.DetectionService.RemovePipelines:output_type -> detection.StatusResponse
+	16, // 32: detection.DetectionService.SetROI:output_type -> detection.StatusResponse
+	16, // 33: detection.DetectionService.AddFace:output_type -> detection.StatusResponse
+	23, // [23:34] is the sub-list for method output_type
+	12, // [12:23] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_proto_detection_proto_init() }
@@ -1921,7 +1918,7 @@ func file_proto_detection_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_detection_proto_rawDesc), len(file_proto_detection_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -468,7 +468,8 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
-	// log.Info().Msgf("AI request: %v %v", req.ProjectNames, req.CameraId)
+	log.Info().Msgf("AI request: %v %v", req.ProjectNames, req.CameraId)
+
 	resp, err := fp.grpcClient.InferDetection(ctx, req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("AI service call failed: %v", err)
@@ -480,6 +481,7 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 		return result
 	}
 
+	// log.Info().Msgf("Response: %v", resp)
 	// AI succeeded!
 	result.FrameProcessed = true
 	fp.extractDetectionsFromResponse(resp, result)
@@ -501,15 +503,15 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		// Map detection levels to model names from model_map
 		var primaryModelName, secondaryModelName, tertiaryModelName string
 		if projectDetections != nil {
-			if mm := projectDetections.GetModelMap(); mm != nil {
-				if v, ok := mm["primary"]; ok {
-					primaryModelName = v
+			if mm := projectDetections; mm != nil {
+				if v := mm.GetPrimaryDetections(); v != nil {
+					primaryModelName = v[0].GetClassName()
 				}
-				if v, ok := mm["secondary"]; ok {
-					secondaryModelName = v
+				if v := mm.GetSecondaryDetections(); v != nil {
+					secondaryModelName = v[0].GetClassName()
 				}
-				if v, ok := mm["tertiary"]; ok {
-					tertiaryModelName = v
+				if v := mm.GetTertiaryDetections(); v != nil {
+					tertiaryModelName = v[0].GetClassName()
 				}
 			}
 		}

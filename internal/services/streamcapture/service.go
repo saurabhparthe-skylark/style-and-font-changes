@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -22,6 +23,17 @@ type Service struct {
 	cfg *config.Config
 }
 
+// activeCaptures ensures only a single OpenCV/FFmpeg capture is active per camera
+type activeCaptureEntry struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+var (
+	activeCaptureMu sync.Mutex
+	activeCaptures  = make(map[string]*activeCaptureEntry)
+)
+
 // NewService creates a new stream capture service
 func NewService(cfg *config.Config) *Service {
 	return &Service{
@@ -31,6 +43,49 @@ func NewService(cfg *config.Config) *Service {
 
 // StartVideoCaptureProcess starts OpenCV VideoCapture for a camera
 func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.Camera) error {
+	// Per-camera guard: ensure only one active capture exists
+	runCtx, runCancel := context.WithCancel(ctx)
+	var entry *activeCaptureEntry
+
+	// Always release runCancel; entry cleanup happens only if created
+	defer func() {
+		runCancel()
+		activeCaptureMu.Lock()
+		if entry != nil {
+			if cur, ok := activeCaptures[camera.ID]; ok && cur == entry {
+				delete(activeCaptures, camera.ID)
+			}
+			close(entry.done)
+		}
+		activeCaptureMu.Unlock()
+	}()
+
+	activeCaptureMu.Lock()
+	if existing, ok := activeCaptures[camera.ID]; ok {
+		// Signal previously running capture to stop
+		if existing.cancel != nil {
+			existing.cancel()
+		}
+		prevDone := existing.done
+		activeCaptureMu.Unlock()
+
+		// Wait briefly for prior capture to release resources to avoid overlapping FFmpeg sessions
+		select {
+		case <-prevDone:
+		case <-time.After(500 * time.Millisecond):
+			log.Warn().
+				Str("camera_id", camera.ID).
+				Msg("Previous capture not closed yet; proceeding to start new capture")
+		case <-ctx.Done():
+			return nil
+		}
+
+		activeCaptureMu.Lock()
+	}
+	entry = &activeCaptureEntry{cancel: runCancel, done: make(chan struct{})}
+	activeCaptures[camera.ID] = entry
+	activeCaptureMu.Unlock()
+
 	log.Info().
 		Str("camera_id", camera.ID).
 		Str("url", camera.URL).
@@ -79,13 +134,10 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 	img := gocv.NewMat()
 	defer img.Close()
 
-	consecutiveErrors := 0
-	maxConsecutiveErrors := 10
-
 	for {
 		// Check context cancellation more aggressively at the start of each loop iteration
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Stopping VideoCapture reader due to context cancel")
 			return nil
 		case <-camera.StopChannel:
@@ -96,7 +148,7 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 
 		// Also check context before reading frame
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before frame read")
 			return nil
 		default:
@@ -104,63 +156,24 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 
 		ok := cap.Read(&img)
 
-		if !ok {
-			consecutiveErrors++
-			log.Warn().
-				Str("camera_id", camera.ID).
-				Int("consecutive_errors", consecutiveErrors).
-				Msg("Failed to read frame from VideoCapture")
-
-			// Enhanced error recovery similar to Python implementation
-			if consecutiveErrors >= maxConsecutiveErrors {
-				log.Warn().
-					Str("camera_id", camera.ID).
-					Int("consecutive_errors", consecutiveErrors).
-					Msg("Too many consecutive errors, attempting decoder reset")
-
-				// Attempt to reset the capture (similar to Python's _reset_decoder)
-				if s.resetVideoCapture(&cap, camera) {
-					consecutiveErrors = 0
-					log.Info().
-						Str("camera_id", camera.ID).
-						Msg("Successfully reset VideoCapture after errors")
-					continue
-				} else {
-					return fmt.Errorf("failed to reset VideoCapture after %d consecutive errors", consecutiveErrors)
-				}
+		if !ok || img.Empty() {
+			// If the stream/capture is no longer open, stop and bubble up an error
+			if !cap.IsOpened() {
+				log.Info().Str("camera_id", camera.ID).Msg("VideoCapture reports closed; stopping reader")
+				return fmt.Errorf("stream closed for camera %s", camera.ID)
 			}
 
-			// Progressive delay based on error count (similar to Python's backoff)
-			delay := time.Duration(consecutiveErrors*50) * time.Millisecond
-			if delay > 2*time.Second {
-				delay = 2 * time.Second
-			}
-
-			// Sleep with context cancellation check
+			// Transient read failure; avoid tight loop
 			select {
-			case <-ctx.Done():
-				log.Info().Str("camera_id", camera.ID).Msg("Context cancelled during error backoff")
+			case <-runCtx.Done():
+				log.Info().Str("camera_id", camera.ID).Msg("Context cancelled during read failure handling")
 				return nil
-			case <-time.After(delay):
-			}
-			continue
-		}
-
-		if img.Empty() {
-			consecutiveErrors++
-			log.Warn().
-				Str("camera_id", camera.ID).
-				Int("consecutive_errors", consecutiveErrors).
-				Msg("Received empty frame from VideoCapture")
-
-			if consecutiveErrors >= maxConsecutiveErrors {
-				return fmt.Errorf("too many consecutive empty frames (%d)", consecutiveErrors)
+			case <-time.After(100 * time.Millisecond):
 			}
 			continue
 		}
 
 		// Successfully read a frame
-		consecutiveErrors = 0
 		frameID++
 		camera.FrameCount++
 		camera.LastFrameTime = time.Now()
@@ -188,7 +201,7 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 
 		// Check context before sending to pipeline
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before sending to pipeline")
 			return nil
 		default:
@@ -199,17 +212,17 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 
 		// Check context before FPS sleep
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before FPS sleep")
 			return nil
 		default:
 		}
 
-		targetInterval := time.Second / time.Duration(s.getTargetFPS())
+		targetInterval := time.Second / time.Duration(s.getTargetFPS(camera))
 
 		// Sleep with context cancellation check
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled during FPS sleep")
 			return nil
 		case <-time.After(targetInterval):
@@ -293,8 +306,8 @@ func (s *Service) CalculateFPS(camera *models.Camera) float64 {
 }
 
 // getTargetFPS returns target FPS based on AI status
-func (s *Service) getTargetFPS() int {
-	if s.cfg.AIEnabled {
+func (s *Service) getTargetFPS(camera *models.Camera) int {
+	if camera != nil && camera.AIEnabled {
 		return s.cfg.MaxFPSWithAI
 	}
 	return s.cfg.MaxFPSNoAI
@@ -384,130 +397,10 @@ func (s *Service) configureVideoCaptureProperties(cap *gocv.VideoCapture) {
 	// Buffer settings for low latency (matching Python implementation)
 	cap.Set(gocv.VideoCaptureBufferSize, 1) // Minimal buffer
 
-	// RTSP specific properties - these are handled via FFmpeg environment variables
-	// since some gocv versions may not have direct RTSP property constants
-
-	// Additional capture properties for optimal streaming
-	// Note: Some advanced properties are configured via FFmpeg environment variables
-
 	log.Info().
 		Int("output_width", s.cfg.OutputWidth).
 		Int("output_height", s.cfg.OutputHeight).
 		Msg("VideoCapture properties configured")
-}
-
-// resetVideoCapture resets the VideoCapture when encountering persistent errors
-// This is similar to the _reset_decoder method in the Python implementation
-func (s *Service) resetVideoCapture(cap **gocv.VideoCapture, camera *models.Camera) bool {
-	log.Info().
-		Str("camera_id", camera.ID).
-		Str("url", camera.URL).
-		Msg("Resetting VideoCapture due to consecutive errors")
-
-	// Close the current capture
-	if *cap != nil {
-		(*cap).Close()
-		*cap = nil
-	}
-
-	// Wait a moment before reconnecting
-	time.Sleep(500 * time.Millisecond)
-
-	// Configure recovery FFmpeg options with more conservative settings
-	s.configureRecoveryFFmpegOptions()
-
-	// Attempt to recreate the VideoCapture
-	newCap, err := gocv.OpenVideoCaptureWithAPI(camera.URL, gocv.VideoCaptureFFmpeg)
-	if err != nil {
-		log.Error().
-			Str("camera_id", camera.ID).
-			Str("url", camera.URL).
-			Err(err).
-			Msg("Failed to reset VideoCapture")
-		return false
-	}
-
-	// Configure properties for the new capture
-	s.configureVideoCaptureProperties(newCap)
-
-	if !newCap.IsOpened() {
-		newCap.Close()
-		log.Error().
-			Str("camera_id", camera.ID).
-			Msg("Reset VideoCapture is not opened")
-		return false
-	}
-
-	// Test read a few frames to ensure it's working
-	testImg := gocv.NewMat()
-	defer testImg.Close()
-
-	testSuccess := false
-	for i := 0; i < 3; i++ {
-		if newCap.Read(&testImg) && !testImg.Empty() {
-			testSuccess = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if !testSuccess {
-		newCap.Close()
-		log.Error().
-			Str("camera_id", camera.ID).
-			Msg("Reset VideoCapture failed test reads")
-		return false
-	}
-
-	*cap = newCap
-	log.Info().
-		Str("camera_id", camera.ID).
-		Msg("VideoCapture reset successful")
-
-	return true
-}
-
-// configureRecoveryFFmpegOptions sets more conservative FFmpeg options for recovery
-func (s *Service) configureRecoveryFFmpegOptions() {
-	log.Info().Msg("Configuring recovery FFmpeg options")
-
-	// More conservative recovery options (similar to Python's recovery_options)
-	recoveryOptions := map[string]string{
-		"rtsp_transport":      "tcp",
-		"buffer_size":         "5000000", // 1MB buffer for recovery
-		"probesize":           "5000000", // 2MB probe for recovery
-		"stimeout":            "5000000", // 5s timeout
-		"fflags":              "nobuffer",
-		"flags":               "low_delay",
-		"max_delay":           "3000000", // 1s max delay
-		"analyzeduration":     "500000",  // 0.25s analyze
-		"err_detect":          "careful",
-		"reconnect":           "1",
-		"reconnect_streamed":  "1",
-		"reconnect_delay_max": "1",
-		"threads":             "1",
-		"thread_type":         "slice",
-	}
-
-	// Build recovery options string
-	var optionsBuilder []string
-	for key, value := range recoveryOptions {
-		optionsBuilder = append(optionsBuilder, key+";"+value)
-	}
-
-	ffmpegOptsStr := ""
-	for i, option := range optionsBuilder {
-		if i > 0 {
-			ffmpegOptsStr += "|"
-		}
-		ffmpegOptsStr += option
-	}
-
-	os.Setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", ffmpegOptsStr)
-
-	log.Info().
-		Str("recovery_options", ffmpegOptsStr).
-		Msg("Recovery FFmpeg options configured")
 }
 
 // ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail using optimized FFmpeg settings
