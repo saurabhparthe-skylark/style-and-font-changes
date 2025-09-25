@@ -532,17 +532,85 @@ func (s *Service) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCh
 		return response
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	frame := gocv.NewMat()
 	defer frame.Close()
 
-	maxAttempts := 10
+	isFrameValid := func(mat gocv.Mat) bool {
+		if mat.Empty() || mat.Cols() <= 0 || mat.Rows() <= 0 {
+			return false
+		}
+
+		gray := gocv.NewMat()
+		defer gray.Close()
+
+		if mat.Channels() == 3 {
+			gocv.CvtColor(mat, &gray, gocv.ColorBGRToGray)
+		} else {
+			gray = mat.Clone()
+		}
+
+		meanMat := gocv.NewMat()
+		stddevMat := gocv.NewMat()
+		defer meanMat.Close()
+		defer stddevMat.Close()
+
+		gocv.MeanStdDev(gray, &meanMat, &stddevMat)
+		meanValue := meanMat.GetDoubleAt(0, 0)
+		stddevValue := stddevMat.GetDoubleAt(0, 0)
+
+		if meanValue < 15 || stddevValue < 8 {
+			log.Debug().Float64("mean", meanValue).Float64("stddev", stddevValue).Msg("Frame rejected - too uniform or dark")
+			return false
+		}
+
+		if meanValue > 110 && meanValue < 150 && stddevValue < 15 {
+			log.Debug().Float64("mean", meanValue).Float64("stddev", stddevValue).Msg("Frame rejected - likely grey")
+			return false
+		}
+
+		return true
+	}
+
+	log.Info().Msg("Skipping initial frames to avoid grey frames")
+
+	skipFrames := 60
+	for i := 0; i < skipFrames; i++ {
+		select {
+		case <-ctx.Done():
+			response.ErrorDetail = "Timeout during initial frame skipping"
+			log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
+			return response
+		default:
+		}
+
+		tempFrame := gocv.NewMat()
+		cap.Read(&tempFrame)
+		tempFrame.Close()
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	log.Info().Msg("Looking for valid non-grey frame for thumbnail")
+
+	maxAttempts := 30
 	for i := 0; i < maxAttempts; i++ {
-		if cap.Read(&frame) && !frame.Empty() && frame.Cols() > 0 && frame.Rows() > 0 {
+		select {
+		case <-ctx.Done():
+			response.ErrorDetail = "Timeout during frame capture"
+			log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
+			return response
+		default:
+		}
+
+		if cap.Read(&frame) && isFrameValid(frame) {
+			log.Info().Int("attempt", i+1).Msg("Successfully captured valid non-grey frame")
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 		if i == maxAttempts-1 {
-			response.ErrorDetail = "Failed to capture valid frame"
+			response.ErrorDetail = "Failed to capture valid non-grey frame after extensive attempts"
 			log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
 			return response
 		}
