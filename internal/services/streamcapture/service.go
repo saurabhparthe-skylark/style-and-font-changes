@@ -23,10 +23,11 @@ type Service struct {
 	cfg *config.Config
 }
 
-// activeCaptures ensures only a single OpenCV/FFmpeg capture is active per camera
 type activeCaptureEntry struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel    context.CancelFunc
+	done      chan struct{}
+	startTime time.Time
+	cap       *gocv.VideoCapture
 }
 
 var (
@@ -41,15 +42,110 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
+// StopCameraCapture forcefully stops a camera's capture process
+func (s *Service) StopCameraCapture(cameraID string) {
+	activeCaptureMu.Lock()
+	defer activeCaptureMu.Unlock()
+
+	if existing, ok := activeCaptures[cameraID]; ok {
+		log.Info().
+			Str("camera_id", cameraID).
+			Dur("runtime", time.Since(existing.startTime)).
+			Msg("Force stopping camera capture")
+
+		// Cancel the context
+		if existing.cancel != nil {
+			existing.cancel()
+		}
+
+		// Close the VideoCapture immediately
+		if existing.cap != nil && existing.cap.IsOpened() {
+			existing.cap.Close()
+		}
+
+		// Remove from active captures
+		delete(activeCaptures, cameraID)
+	}
+}
+
+// CleanupAllCaptures stops all active captures (useful for shutdown)
+func (s *Service) CleanupAllCaptures() {
+	activeCaptureMu.Lock()
+	defer activeCaptureMu.Unlock()
+
+	log.Info().
+		Int("active_captures", len(activeCaptures)).
+		Msg("Cleaning up all active captures")
+
+	for cameraID, existing := range activeCaptures {
+		if existing.cancel != nil {
+			existing.cancel()
+		}
+
+		if existing.cap != nil && existing.cap.IsOpened() {
+			existing.cap.Close()
+		}
+
+		log.Debug().
+			Str("camera_id", cameraID).
+			Msg("Cleaned up capture")
+	}
+
+	// Clear the map
+	activeCaptures = make(map[string]*activeCaptureEntry)
+}
+
+// GetActiveCaptureCount returns the number of active captures (for monitoring)
+func (s *Service) GetActiveCaptureCount() int {
+	activeCaptureMu.Lock()
+	defer activeCaptureMu.Unlock()
+	return len(activeCaptures)
+}
+
+// CleanupStaleCaptures removes captures that have been running too long without activity
+func (s *Service) CleanupStaleCaptures(maxAge time.Duration) {
+	activeCaptureMu.Lock()
+	defer activeCaptureMu.Unlock()
+
+	now := time.Now()
+	for cameraID, existing := range activeCaptures {
+		age := now.Sub(existing.startTime)
+		if age > maxAge {
+			log.Warn().
+				Str("camera_id", cameraID).
+				Dur("age", age).
+				Dur("max_age", maxAge).
+				Msg("Cleaning up stale capture")
+
+			if existing.cancel != nil {
+				existing.cancel()
+			}
+
+			if existing.cap != nil && existing.cap.IsOpened() {
+				existing.cap.Close()
+			}
+
+			delete(activeCaptures, cameraID)
+		}
+	}
+}
+
 // StartVideoCaptureProcess starts OpenCV VideoCapture for a camera
 func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.Camera) error {
 	// Per-camera guard: ensure only one active capture exists
 	runCtx, runCancel := context.WithCancel(ctx)
 	var entry *activeCaptureEntry
+	var cap *gocv.VideoCapture
 
 	// Always release runCancel; entry cleanup happens only if created
 	defer func() {
 		runCancel()
+
+		// Ensure VideoCapture is properly closed
+		if cap != nil && cap.IsOpened() {
+			cap.Close()
+		}
+
 		activeCaptureMu.Lock()
 		if entry != nil {
 			if cur, ok := activeCaptures[camera.ID]; ok && cur == entry {
@@ -60,29 +156,63 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 		activeCaptureMu.Unlock()
 	}()
 
+	// Clean up any existing capture first
 	activeCaptureMu.Lock()
 	if existing, ok := activeCaptures[camera.ID]; ok {
+		log.Info().
+			Str("camera_id", camera.ID).
+			Dur("previous_runtime", time.Since(existing.startTime)).
+			Msg("Stopping existing capture before starting new one")
+
 		// Signal previously running capture to stop
 		if existing.cancel != nil {
 			existing.cancel()
 		}
+
+		// Close the existing VideoCapture immediately if we have reference
+		if existing.cap != nil && existing.cap.IsOpened() {
+			existing.cap.Close()
+		}
+
 		prevDone := existing.done
 		activeCaptureMu.Unlock()
 
-		// Wait briefly for prior capture to release resources to avoid overlapping FFmpeg sessions
+		// Wait for prior capture to fully release resources
+		waitTimeout := 2 * time.Second
 		select {
 		case <-prevDone:
-		case <-time.After(500 * time.Millisecond):
-			log.Warn().
+			log.Info().
 				Str("camera_id", camera.ID).
-				Msg("Previous capture not closed yet; proceeding to start new capture")
+				Msg("Previous capture closed successfully")
+		case <-time.After(waitTimeout):
+			log.Error().
+				Str("camera_id", camera.ID).
+				Dur("timeout", waitTimeout).
+				Msg("Previous capture failed to close within timeout - forcing cleanup")
+
+			// Force remove the entry
+			activeCaptureMu.Lock()
+			if cur, ok := activeCaptures[camera.ID]; ok && cur == existing {
+				delete(activeCaptures, camera.ID)
+			}
+			activeCaptureMu.Unlock()
 		case <-ctx.Done():
 			return nil
 		}
 
+		// Add a small delay to ensure FFmpeg process is fully terminated
+		time.Sleep(500 * time.Millisecond)
+
 		activeCaptureMu.Lock()
 	}
-	entry = &activeCaptureEntry{cancel: runCancel, done: make(chan struct{})}
+
+	// Create new entry
+	entry = &activeCaptureEntry{
+		cancel:    runCancel,
+		done:      make(chan struct{}),
+		startTime: time.Now(),
+		cap:       nil, // Will be set after successful open
+	}
 	activeCaptures[camera.ID] = entry
 	activeCaptureMu.Unlock()
 
@@ -95,22 +225,19 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 	s.configureFFmpegOptions()
 
 	// Create VideoCapture - handle webcam vs RTSP
-	var cap *gocv.VideoCapture
 	var err error
-
-	// RTSP case
-	log.Info().
-		Str("camera_id", camera.ID).
-		Str("rtsp_url", camera.URL).
-		Msg("Opening RTSP stream with comprehensive FFmpeg options")
 
 	cap, err = gocv.OpenVideoCaptureWithAPI(camera.URL, gocv.VideoCaptureFFmpeg)
 	if err != nil {
 		return fmt.Errorf("failed to open RTSP stream %s: %w", camera.URL, err)
 	}
-	defer cap.Close()
 
-	// Set comprehensive RTSP properties for optimal streaming
+	activeCaptureMu.Lock()
+	if entry != nil {
+		entry.cap = cap
+	}
+	activeCaptureMu.Unlock()
+
 	s.configureVideoCaptureProperties(cap)
 
 	if !cap.IsOpened() {
@@ -135,7 +262,6 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 	defer img.Close()
 
 	for {
-		// Check context cancellation more aggressively at the start of each loop iteration
 		select {
 		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Stopping VideoCapture reader due to context cancel")
@@ -146,7 +272,6 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 		default:
 		}
 
-		// Also check context before reading frame
 		select {
 		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before frame read")
@@ -157,13 +282,11 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 		ok := cap.Read(&img)
 
 		if !ok || img.Empty() {
-			// If the stream/capture is no longer open, stop and bubble up an error
 			if !cap.IsOpened() {
 				log.Info().Str("camera_id", camera.ID).Msg("VideoCapture reports closed; stopping reader")
 				return fmt.Errorf("stream closed for camera %s", camera.ID)
 			}
 
-			// Transient read failure; avoid tight loop
 			select {
 			case <-runCtx.Done():
 				log.Info().Str("camera_id", camera.ID).Msg("Context cancelled during read failure handling")
@@ -173,7 +296,6 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 			continue
 		}
 
-		// Successfully read a frame
 		frameID++
 		camera.FrameCount++
 		camera.LastFrameTime = time.Now()
@@ -185,7 +307,6 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 			processedImg = img.Clone()
 		}
 
-		// Convert to bytes (BGR)
 		frameData := processedImg.ToBytes()
 		processedImg.Close()
 
@@ -199,7 +320,6 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 			Format:    "BGR24",
 		}
 
-		// Check context before sending to pipeline
 		select {
 		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before sending to pipeline")
@@ -207,10 +327,8 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 		default:
 		}
 
-		// Send to processing pipeline
 		s.sendFrameToPipeline(camera, rawFrame, frameID)
 
-		// Check context before FPS sleep
 		select {
 		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled before FPS sleep")
@@ -220,7 +338,6 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 
 		targetInterval := time.Second / time.Duration(s.getTargetFPS(camera))
 
-		// Sleep with context cancellation check
 		select {
 		case <-runCtx.Done():
 			log.Info().Str("camera_id", camera.ID).Msg("Context cancelled during FPS sleep")
@@ -242,7 +359,6 @@ func (s *Service) sendFrameToPipeline(camera *models.Camera, rawFrame *models.Ra
 		}
 	}()
 
-	// Use a helper function to safely check if channel is available
 	rawFramesChan := camera.RawFrames
 	if rawFramesChan == nil {
 		log.Debug().
@@ -255,18 +371,14 @@ func (s *Service) sendFrameToPipeline(camera *models.Camera, rawFrame *models.Ra
 	select {
 	case rawFramesChan <- rawFrame:
 	default:
-		// Buffer is full - just drop one frame and send current
 		select {
 		case <-rawFramesChan:
-			// Dropped one frame
 		default:
 		}
 
-		// Send current frame
 		select {
 		case rawFramesChan <- rawFrame:
 		default:
-			// Still full, skip this frame
 			log.Debug().
 				Str("camera_id", camera.ID).
 				Int64("frame_id", frameID).
@@ -281,21 +393,17 @@ func (s *Service) CalculateFPS(camera *models.Camera) float64 {
 		return 0
 	}
 
-	// Add current timestamp to the rolling window
 	now := time.Now()
 	camera.RecentFrameTimes = append(camera.RecentFrameTimes, now)
 
-	// Keep only the most recent N timestamps
 	if len(camera.RecentFrameTimes) > camera.FPSWindowSize {
 		camera.RecentFrameTimes = camera.RecentFrameTimes[1:]
 	}
 
-	// Need at least 2 timestamps to calculate FPS
 	if len(camera.RecentFrameTimes) < 2 {
 		return 0
 	}
 
-	// Calculate FPS based on time difference between first and last timestamp in window
 	timeSpan := camera.RecentFrameTimes[len(camera.RecentFrameTimes)-1].Sub(camera.RecentFrameTimes[0]).Seconds()
 	if timeSpan > 0 {
 		frameCount := float64(len(camera.RecentFrameTimes) - 1)
@@ -315,10 +423,8 @@ func (s *Service) getTargetFPS(camera *models.Camera) int {
 
 // CalculateBackoffDelay calculates jittered exponential backoff delay
 func (s *Service) CalculateBackoffDelay(attempt int) time.Duration {
-	// Base delay with exponential backoff
 	baseDelay := time.Duration(math.Pow(2, float64(attempt))) * time.Second
 
-	// Clamp to configured min/max
 	if baseDelay < s.cfg.ReconnectBackoffMin {
 		baseDelay = s.cfg.ReconnectBackoffMin
 	}
@@ -326,7 +432,6 @@ func (s *Service) CalculateBackoffDelay(attempt int) time.Duration {
 		baseDelay = s.cfg.ReconnectBackoffMax
 	}
 
-	// Add jitter (random percentage of the delay)
 	jitterPct := float64(s.cfg.ReconnectJitterPct) / 100.0
 	jitter := time.Duration(float64(baseDelay) * jitterPct * (rand.Float64()*2 - 1))
 
@@ -335,41 +440,46 @@ func (s *Service) CalculateBackoffDelay(attempt int) time.Duration {
 
 // configureFFmpegOptions sets comprehensive FFmpeg options via environment variables
 func (s *Service) configureFFmpegOptions() {
-	log.Info().Msg("Configuring comprehensive FFmpeg options for OpenCV")
+	log.Info().Msg("Configuring optimized FFmpeg options for OpenCV to avoid grey frames")
 
-	// FFmpeg options optimized for RTSP streaming
 	ffmpegOptions := map[string]string{
-		"rtsp_transport":        "tcp",     // Use TCP for more reliable connection
-		"buffer_size":           "2097152", // 2MB buffer - smaller for real-time
-		"max_delay":             "500000",  // 0.5s max delay
-		"stimeout":              "5000000", // 5s timeout
-		"rw_timeout":            "5000000", // 5s read/write timeout
-		"threads":               "1",       // Single thread
-		"thread_type":           "slice",
-		"flags":                 "low_delay",
-		"fflags":                "nobuffer+flush_packets+discardcorrupt",
-		"sync":                  "ext",
-		"drop_pkts_on_overflow": "1",
-		"max_error_rate":        "0.1",
-		"skip_frame":            "default",
-		"skip_loop_filter":      "none",
-		"analyzeduration":       "500000",  // 0.5s analyze
-		"probesize":             "2000000", // 2MB probe
-		"err_detect":            "careful",
-		"allowed_media_types":   "video",
-		"reconnect":             "1",
-		"reconnect_at_eof":      "1",
-		"reconnect_streamed":    "1",
-		"reconnect_delay_max":   "2",
+		"rtsp_transport":              "tcp",
+		"rtsp_flags":                  "prefer_tcp",
+		"stimeout":                    "10000000",
+		"rw_timeout":                  "10000000",
+		"buffer_size":                 "1048576",
+		"max_delay":                   "100000",
+		"reorder_queue_size":          "0",
+		"analyzeduration":             "2000000",
+		"probesize":                   "4000000",
+		"max_probe_packets":           "100",
+		"threads":                     "1",
+		"thread_type":                 "slice",
+		"flags":                       "low_delay+global_header",
+		"fflags":                      "nobuffer+flush_packets+discardcorrupt+genpts",
+		"sync":                        "ext",
+		"drop_pkts_on_overflow":       "1",
+		"flush_packets":               "1",
+		"skip_frame":                  "nokey",
+		"skip_loop_filter":            "none",
+		"skip_idct":                   "none",
+		"max_error_rate":              "0.05",
+		"err_detect":                  "careful",
+		"allowed_media_types":         "video",
+		"reconnect":                   "1",
+		"reconnect_at_eof":            "1",
+		"reconnect_streamed":          "1",
+		"reconnect_delay_max":         "3",
+		"avoid_negative_ts":           "make_zero",
+		"use_wallclock_as_timestamps": "1",
+		"fpsprobesize":                "3",
 	}
 
-	// Build FFmpeg options string in the format expected by OpenCV
 	var optionsBuilder []string
 	for key, value := range ffmpegOptions {
 		optionsBuilder = append(optionsBuilder, key+";"+value)
 	}
 
-	// Join all options with | delimiter
 	ffmpegOptsStr := ""
 	for i, option := range optionsBuilder {
 		if i > 0 {
@@ -378,7 +488,6 @@ func (s *Service) configureFFmpegOptions() {
 		ffmpegOptsStr += option
 	}
 
-	// Set the environment variable that OpenCV FFmpeg backend will use
 	os.Setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", ffmpegOptsStr)
 
 	log.Info().
@@ -388,34 +497,25 @@ func (s *Service) configureFFmpegOptions() {
 
 // configureVideoCaptureProperties sets OpenCV VideoCapture properties for optimal streaming
 func (s *Service) configureVideoCaptureProperties(cap *gocv.VideoCapture) {
-	log.Info().Msg("Configuring VideoCapture properties")
+	log.Info().Msg("Configuring VideoCapture properties for grey frame prevention")
 
-	// Basic frame properties
-	cap.Set(gocv.VideoCaptureFrameWidth, float64(s.cfg.OutputWidth))
-	cap.Set(gocv.VideoCaptureFrameHeight, float64(s.cfg.OutputHeight))
+	cap.Set(gocv.VideoCaptureBufferSize, 1)
+	cap.Set(gocv.VideoCaptureFPS, 0)
 
-	// Buffer settings for low latency (matching Python implementation)
-	cap.Set(gocv.VideoCaptureBufferSize, 1) // Minimal buffer
-
-	log.Info().
-		Int("output_width", s.cfg.OutputWidth).
-		Int("output_height", s.cfg.OutputHeight).
-		Msg("VideoCapture properties configured")
+	log.Info().Msg("VideoCapture properties configured for optimal grey frame prevention")
 }
 
-// ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail using optimized FFmpeg settings
+// ValidateRTSPAndCaptureThumbnail validates RTSP stream and captures HD thumbnail
 func (s *Service) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCheckResponse {
 	response := &models.RTSPCheckResponse{
 		Valid:   false,
 		Message: "RTSP stream validation failed",
 	}
 
-	log.Info().Str("rtsp_url", rtspURL).Msg("Starting RTSP validation with optimized FFmpeg settings")
+	log.Info().Str("rtsp_url", rtspURL).Msg("Starting RTSP validation")
 
-	// Configure comprehensive FFmpeg options for validation
 	s.configureFFmpegOptions()
 
-	// Try to open the RTSP stream with FFmpeg backend
 	cap, err := gocv.OpenVideoCaptureWithAPI(rtspURL, gocv.VideoCaptureFFmpeg)
 	if err != nil {
 		response.ErrorDetail = fmt.Sprintf("Failed to open RTSP stream: %v", err)
@@ -424,144 +524,44 @@ func (s *Service) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCh
 	}
 	defer cap.Close()
 
-	// Configure VideoCapture properties
 	s.configureVideoCaptureProperties(cap)
 
-	// Check if capture is opened
 	if !cap.IsOpened() {
 		response.ErrorDetail = "RTSP stream could not be opened"
 		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
 		return response
 	}
 
-	// Create context with timeout for proper cancellation (increased for frame flushing)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	frame := gocv.NewMat()
+	defer frame.Close()
 
-	// Channel to receive frame reading results
-	type frameResult struct {
-		frame   gocv.Mat
-		success bool
-	}
-	frameResultChan := make(chan frameResult, 1)
-
-	var actualFPS, actualWidth, actualHeight float64
-
-	// Try to read frame in goroutine with proper resource management
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Error().Interface("panic", r).Msg("Panic in frame reading goroutine")
-				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
-			}
-		}()
-
-		localFrame := gocv.NewMat()
-		flushFrame := gocv.NewMat()
-		defer flushFrame.Close()
-
-		// First, flush the first 30 frames to skip initial grey/black frames
-		log.Info().Msg("Flushing first 30 frames to skip initial stream artifacts")
-		for i := 0; i < 30; i++ {
-			select {
-			case <-ctx.Done():
-				localFrame.Close()
-				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
-				return
-			default:
-			}
-
-			// Read and discard frame
-			cap.Read(&flushFrame)
-
-			// Small delay to allow stream to stabilize
-			select {
-			case <-ctx.Done():
-				localFrame.Close()
-				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
-				return
-			case <-time.After(50 * time.Millisecond):
-			}
+	maxAttempts := 10
+	for i := 0; i < maxAttempts; i++ {
+		if cap.Read(&frame) && !frame.Empty() && frame.Cols() > 0 && frame.Rows() > 0 {
+			break
 		}
-
-		log.Info().Msg("Finished flushing frames, now capturing thumbnail frame")
-
-		// Now try to read a good frame for thumbnail
-		for i := 0; i < 10; i++ {
-			select {
-			case <-ctx.Done():
-				localFrame.Close()
-				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
-				return
-			default:
-			}
-
-			if cap.Read(&localFrame) && !localFrame.Empty() {
-				// Success - send the frame (ownership transferred to main goroutine)
-				frameResultChan <- frameResult{frame: localFrame, success: true}
-				return
-			}
-
-			// Small delay before retry
-			select {
-			case <-ctx.Done():
-				localFrame.Close()
-				frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
-				return
-			case <-time.After(100 * time.Millisecond):
-			}
-		}
-
-		// Failed to read stable frames after flushing
-		localFrame.Close()
-		frameResultChan <- frameResult{frame: gocv.NewMat(), success: false}
-	}()
-
-	// Wait for frame read result or context timeout
-	var frame gocv.Mat
-	select {
-	case result := <-frameResultChan:
-		frame = result.frame
-		if !result.success {
-			frame.Close()
-			response.ErrorDetail = "Failed to read stable frames from RTSP stream"
+		time.Sleep(100 * time.Millisecond)
+		if i == maxAttempts-1 {
+			response.ErrorDetail = "Failed to capture valid frame"
 			log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
 			return response
 		}
-	case <-ctx.Done():
-		// Timeout occurred - goroutine will clean up its own resources
-		response.ErrorDetail = "Timeout reading from RTSP stream (15s limit)"
-		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
-		return response
 	}
 
-	defer frame.Close()
+	actualFPS := cap.Get(gocv.VideoCaptureFPS)
+	actualWidth := cap.Get(gocv.VideoCaptureFrameWidth)
+	actualHeight := cap.Get(gocv.VideoCaptureFrameHeight)
 
-	// Get stream properties
-	actualFPS = cap.Get(gocv.VideoCaptureFPS)
-	actualWidth = cap.Get(gocv.VideoCaptureFrameWidth)
-	actualHeight = cap.Get(gocv.VideoCaptureFrameHeight)
-
-	// Validate frame dimensions
-	if frame.Cols() <= 0 || frame.Rows() <= 0 {
-		response.ErrorDetail = "Invalid frame dimensions"
-		log.Warn().Str("rtsp_url", rtspURL).Str("error", response.ErrorDetail).Msg("RTSP stream validation failed")
-		return response
-	}
-
-	// Resize to HD if needed (1280x720 for HD thumbnail)
 	hdWidth, hdHeight := 1280, 720
-	var resizedFrame gocv.Mat
+	resizedFrame := gocv.NewMat()
+	defer resizedFrame.Close()
 
 	if frame.Cols() != hdWidth || frame.Rows() != hdHeight {
-		resizedFrame = gocv.NewMat()
 		gocv.Resize(frame, &resizedFrame, image.Pt(hdWidth, hdHeight), 0, 0, gocv.InterpolationLinear)
 	} else {
 		resizedFrame = frame.Clone()
 	}
-	defer resizedFrame.Close()
 
-	// Convert to JPEG with high quality
 	jpegData, err := gocv.IMEncodeWithParams(gocv.JPEGFileExt, resizedFrame, []int{gocv.IMWriteJpegQuality, 95})
 	if err != nil {
 		response.ErrorDetail = fmt.Sprintf("Failed to encode thumbnail: %v", err)
@@ -570,10 +570,8 @@ func (s *Service) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCh
 	}
 	defer jpegData.Close()
 
-	// Convert to base64 data URL
 	thumbnail := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(jpegData.GetBytes())
 
-	// Success response
 	response.Valid = true
 	response.Message = "RTSP stream is valid and accessible"
 	response.Thumbnail = thumbnail
@@ -587,7 +585,7 @@ func (s *Service) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCh
 		Int("width", response.Width).
 		Int("height", response.Height).
 		Float64("fps", response.FPS).
-		Msg("RTSP stream validation successful with optimized settings")
+		Msg("RTSP stream validation successful")
 
 	return response
 }

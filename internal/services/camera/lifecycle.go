@@ -229,6 +229,11 @@ func (cl *CameraLifecycle) Stop() error {
 
 	atomic.StoreInt32(&cl.running, 0)
 
+	// Force stop the stream capture first to ensure FFmpeg process is killed immediately
+	if streamSvc := cl.getStreamCaptureService(); streamSvc != nil {
+		streamSvc.StopCameraCapture(cl.camera.ID)
+	}
+
 	if cl.cancel != nil {
 		cl.cancel()
 	}
@@ -240,12 +245,12 @@ func (cl *CameraLifecycle) Stop() error {
 		}
 	}()
 
-	// Wait for shutdown
+	// Wait for shutdown with longer timeout for proper cleanup
 	select {
 	case <-cl.shutdownDone:
 		log.Debug().Str("camera_id", cl.camera.ID).Msg("Shutdown confirmed")
 	case <-time.After(5 * time.Second):
-		log.Warn().Str("camera_id", cl.camera.ID).Msg("Shutdown timeout")
+		log.Warn().Str("camera_id", cl.camera.ID).Msg("Shutdown timeout - forcing cleanup")
 	}
 
 	cl.cleanup()
@@ -259,19 +264,48 @@ func (cl *CameraLifecycle) Stop() error {
 	return nil
 }
 
-// Restart restarts the camera
+// Restart restarts the camera with proper cleanup
 func (cl *CameraLifecycle) Restart() error {
 	log.Info().
 		Str("camera_id", cl.camera.ID).
-		Msg("Restarting camera")
+		Msg("Restarting camera with enhanced cleanup")
 
-	_ = cl.Stop()
-	time.Sleep(300 * time.Millisecond)
+	// Stop the camera first
+	if err := cl.Stop(); err != nil {
+		log.Warn().
+			Str("camera_id", cl.camera.ID).
+			Err(err).
+			Msg("Error during stop phase of restart")
+	}
+
+	// Wait longer to ensure all resources are released
+	// This gives time for FFmpeg processes to fully terminate
+	time.Sleep(1 * time.Second)
+
+	// Clear channels to ensure fresh state
+	cl.createChannels()
+
+	// Start the camera
 	return cl.Start()
 }
 
-// ForceRestart forces a restart
+// ForceRestart forces a restart with extra cleanup time
 func (cl *CameraLifecycle) ForceRestart() error {
+	log.Warn().
+		Str("camera_id", cl.camera.ID).
+		Msg("Force restarting camera with extended cleanup")
+
+	// Force stop stream capture even if not in running state
+	if streamSvc := cl.getStreamCaptureService(); streamSvc != nil {
+		streamSvc.StopCameraCapture(cl.camera.ID)
+	}
+
+	// Force state to stopped to allow restart
+	cl.setState(StateStopped)
+
+	// Extra wait time for force restart
+	time.Sleep(2 * time.Second)
+
 	return cl.Restart()
 }
 
