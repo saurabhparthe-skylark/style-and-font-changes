@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"gocv.io/x/gocv"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -415,6 +416,19 @@ func (fp *FrameProcessor) ProcessFrame(
 		} else {
 			shouldProcessAI = (rawFrame.FrameID % int64(aiFrameInterval)) == 0
 		}
+		if fp.grpcConn.GetState() != connectivity.Ready {
+			shouldProcessAI = false
+		}
+
+		//TODO : Optimize this
+		// Check if GRPC is healthy
+		// healthy, err := fp.grpcClient.HealthCheck(context.Background(), &pb.Empty{})
+		// if err != nil {
+		// 	shouldProcessAI = false
+		// }
+		// if healthy.Status != "healthy" {
+		// 	shouldProcessAI = false
+		// }
 	}
 
 	if shouldProcessAI {
@@ -522,16 +536,14 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		// Map detection levels to model names from model_map
 		var primaryModelName, secondaryModelName, tertiaryModelName string
 		if projectDetections != nil {
-			if mm := projectDetections; mm != nil {
-				if v := mm.GetPrimaryDetections(); v != nil {
-					primaryModelName = v[0].GetClassName()
-				}
-				if v := mm.GetSecondaryDetections(); v != nil {
-					secondaryModelName = v[0].GetClassName()
-				}
-				if v := mm.GetTertiaryDetections(); v != nil {
-					tertiaryModelName = v[0].GetClassName()
-				}
+			if v := projectDetections.GetPrimaryDetections(); v != nil {
+				primaryModelName = v[0].GetClassName()
+			}
+			if v := projectDetections.GetSecondaryDetections(); v != nil {
+				secondaryModelName = v[0].GetClassName()
+			}
+			if v := projectDetections.GetTertiaryDetections(); v != nil {
+				tertiaryModelName = v[0].GetClassName()
 			}
 		}
 		projectCount := 0
