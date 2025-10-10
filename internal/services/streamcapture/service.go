@@ -58,13 +58,12 @@ func (s *Service) StopCameraCapture(cameraID string) {
 			existing.cancel()
 		}
 
-		// Close the VideoCapture immediately
-		if existing.cap != nil && existing.cap.IsOpened() {
-			existing.cap.Close()
+		// Do not delete immediately; allow the capture goroutine to exit and clean up
+		// Optionally wait briefly for it to signal done (non-blocking to callers of this function)
+		select {
+		case <-existing.done:
+		case <-time.After(2 * time.Second):
 		}
-
-		// Remove from active captures
-		delete(activeCaptures, cameraID)
 	}
 }
 
@@ -80,10 +79,6 @@ func (s *Service) CleanupAllCaptures() {
 	for cameraID, existing := range activeCaptures {
 		if existing.cancel != nil {
 			existing.cancel()
-		}
-
-		if existing.cap != nil && existing.cap.IsOpened() {
-			existing.cap.Close()
 		}
 
 		log.Debug().
@@ -120,12 +115,7 @@ func (s *Service) CleanupStaleCaptures(maxAge time.Duration) {
 			if existing.cancel != nil {
 				existing.cancel()
 			}
-
-			if existing.cap != nil && existing.cap.IsOpened() {
-				existing.cap.Close()
-			}
-
-			delete(activeCaptures, cameraID)
+			// Do not delete immediately; let the goroutine's deferred cleanup remove the entry
 		}
 	}
 }
@@ -169,16 +159,11 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 			existing.cancel()
 		}
 
-		// Close the existing VideoCapture immediately if we have reference
-		if existing.cap != nil && existing.cap.IsOpened() {
-			existing.cap.Close()
-		}
-
 		prevDone := existing.done
 		activeCaptureMu.Unlock()
 
 		// Wait for prior capture to fully release resources
-		waitTimeout := 2 * time.Second
+		waitTimeout := 35 * time.Second
 		select {
 		case <-prevDone:
 			log.Info().
@@ -188,14 +173,8 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 			log.Error().
 				Str("camera_id", camera.ID).
 				Dur("timeout", waitTimeout).
-				Msg("Previous capture failed to close within timeout - forcing cleanup")
-
-			// Force remove the entry
-			activeCaptureMu.Lock()
-			if cur, ok := activeCaptures[camera.ID]; ok && cur == existing {
-				delete(activeCaptures, camera.ID)
-			}
-			activeCaptureMu.Unlock()
+				Msg("Previous capture failed to close within timeout - will retry later to avoid concurrent Close/Read")
+			return fmt.Errorf("previous capture for camera %s did not close within timeout", camera.ID)
 		case <-ctx.Done():
 			return nil
 		}
@@ -258,8 +237,7 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 
 	// Frame reading loop
 	frameID := int64(0)
-	img := gocv.NewMat()
-	defer img.Close()
+	consecutiveFailCount := 0
 
 	for {
 		select {
@@ -279,12 +257,23 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 		default:
 		}
 
+		img := gocv.NewMat()
 		ok := cap.Read(&img)
 
 		if !ok || img.Empty() {
+			img.Close()
 			if !cap.IsOpened() {
 				log.Info().Str("camera_id", camera.ID).Msg("VideoCapture reports closed; stopping reader")
 				return fmt.Errorf("stream closed for camera %s", camera.ID)
+			}
+
+			consecutiveFailCount++
+			if consecutiveFailCount >= 100 { // ~10s with 100ms delay
+				log.Error().
+					Str("camera_id", camera.ID).
+					Int("consecutive_failures", consecutiveFailCount).
+					Msg("Too many consecutive read failures - forcing capture reopen")
+				return fmt.Errorf("too many consecutive read failures for camera %s", camera.ID)
 			}
 
 			select {
@@ -295,6 +284,8 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 			}
 			continue
 		}
+
+		consecutiveFailCount = 0
 
 		frameID++
 		camera.FrameCount++
@@ -309,6 +300,7 @@ func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.C
 
 		frameData := processedImg.ToBytes()
 		processedImg.Close()
+		img.Close()
 
 		rawFrame := &models.RawFrame{
 			CameraID:  camera.ID,

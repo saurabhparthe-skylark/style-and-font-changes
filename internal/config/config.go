@@ -198,7 +198,7 @@ func Load() *Config {
 		PublishingBuffer: getEnvInt("PUBLISHING_BUFFER_SIZE", 20),
 
 		// AI Processing
-		AIEnabled:       getEnvBool("AI_ENABLED", true),
+		AIEnabled:       getEnvBool("AI_ENABLED", false),
 		AITimeout:       getEnvDuration("AI_TIMEOUT", 5*time.Second),
 		AIRetries:       getEnvInt("AI_RETRIES", 3),
 		AIFrameInterval: getEnvInt("AI_FRAME_INTERVAL", 1),
