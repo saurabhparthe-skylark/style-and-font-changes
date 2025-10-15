@@ -41,8 +41,11 @@ func main() {
 func setupLogging(cfg *config.Config) error {
 	zerolog.TimeFieldFormat = time.RFC3339
 
-	// Base writer to stderr
-	baseWriter := zerolog.ConsoleWriter{Out: os.Stderr}
+	// Base writer to stderr (disable colors for production/Lambda)
+	baseWriter := zerolog.ConsoleWriter{
+		Out:     os.Stderr,
+		NoColor: cfg.Environment == "production",
+	}
 	out := zerolog.MultiLevelWriter(baseWriter)
 
 	// Optionally start Logdy and tee logs

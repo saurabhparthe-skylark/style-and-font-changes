@@ -2,22 +2,16 @@ package frameprocessing
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"image"
 	"image/color"
 	"math"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"gocv.io/x/gocv"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/connectivity"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"kepler-worker-go/internal/config"
 	"kepler-worker-go/internal/models"
@@ -27,12 +21,9 @@ import (
 
 // FrameProcessor handles AI processing and metadata overlay
 type FrameProcessor struct {
-	cfg    *config.Config
-	camera *models.Camera
-
-	grpcConn   *grpc.ClientConn
-	grpcClient pb.DetectionServiceClient
-	aiEndpoint string
+	cfg      *config.Config
+	camera   *models.Camera
+	aiClient *AIClient // Dedicated AI client with auto-retry
 }
 
 func NewFrameProcessor(cfg *config.Config) (*FrameProcessor, error) {
@@ -40,152 +31,67 @@ func NewFrameProcessor(cfg *config.Config) (*FrameProcessor, error) {
 }
 
 func NewFrameProcessorWithCamera(cfg *config.Config, camera *models.Camera) (*FrameProcessor, error) {
-	fp := &FrameProcessor{cfg: cfg, camera: camera}
+	fp := &FrameProcessor{
+		cfg:    cfg,
+		camera: camera,
+	}
 
-	if camera != nil && camera.AIEnabled && camera.AIEndpoint != "" {
-		log.Info().Str("camera_id", camera.ID).Str("ai_endpoint", camera.AIEndpoint).Bool("ai_enabled", camera.AIEnabled).Msg("Initializing frame processor with AI enabled")
-		if err := fp.initGRPCConnection(camera.AIEndpoint); err != nil {
-			log.Error().Err(err).Str("camera_id", camera.ID).Str("ai_endpoint", camera.AIEndpoint).Msg("Failed to initialize AI gRPC connection - AI will be disabled for this camera")
+	// Create AI client if camera is provided
+	if camera != nil {
+		fp.aiClient = NewAIClient(cfg, camera.ID)
+
+		// Try to connect if AI is enabled
+		if camera.AIEnabled && camera.AIEndpoint != "" {
+			log.Info().
+				Str("camera_id", camera.ID).
+				Str("ai_endpoint", camera.AIEndpoint).
+				Msg("Initializing frame processor with AI client")
+
+			// Non-blocking connection attempt - will auto-retry on first frame if it fails
+			if err := fp.aiClient.Connect(camera.AIEndpoint); err != nil {
+				log.Warn().
+					Err(err).
+					Str("camera_id", camera.ID).
+					Msg("Initial AI connection failed - will auto-retry during processing")
+			}
 		} else {
-			log.Info().Str("camera_id", camera.ID).Str("ai_endpoint", camera.AIEndpoint).Msg("AI gRPC connection successfully established")
+			log.Info().
+				Str("camera_id", camera.ID).
+				Bool("ai_enabled", camera.AIEnabled).
+				Msg("Frame processor created without AI connection")
 		}
-	} else {
-		log.Info().Str("camera_id", func() string {
-			if camera != nil {
-				return camera.ID
-			}
-			return "unknown"
-		}()).Bool("ai_enabled", camera != nil && camera.AIEnabled).Str("ai_endpoint", func() string {
-			if camera != nil {
-				return camera.AIEndpoint
-			}
-			return ""
-		}()).Msg("Frame processor created without AI (AI disabled or no endpoint)")
 	}
 
 	return fp, nil
 }
 
-func (fp *FrameProcessor) initGRPCConnection(endpoint string) error {
-	if fp.grpcConn != nil && fp.aiEndpoint == endpoint {
-		return nil
-	}
-	if fp.grpcConn != nil {
-		fp.grpcConn.Close()
-	}
-
-	normalizedEndpoint, creds, err := fp.parseGRPCEndpoint(endpoint)
-	if err != nil {
-		return fmt.Errorf("failed to parse AI endpoint %s: %w", endpoint, err)
-	}
-
-	log.Info().Str("original_endpoint", endpoint).Str("normalized_endpoint", normalizedEndpoint).Bool("use_tls", creds.Info().SecurityProtocol == "tls").Msg("Connecting to AI gRPC service")
-
-	conn, err := grpc.NewClient(normalizedEndpoint, grpc.WithTransportCredentials(creds))
-	if err != nil {
-		return fmt.Errorf("failed to connect to AI service at %s: %w", normalizedEndpoint, err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	client := pb.NewDetectionServiceClient(conn)
-	if _, err := client.HealthCheck(ctx, &pb.Empty{}); err != nil {
-		conn.Close()
-		return fmt.Errorf("AI service health check failed at %s: %w", normalizedEndpoint, err)
-	}
-
-	fp.grpcConn = conn
-	fp.grpcClient = client
-	fp.aiEndpoint = endpoint
-	log.Info().Str("ai_endpoint", normalizedEndpoint).Msg("AI gRPC connection successfully established")
-	return nil
-}
-
-func (fp *FrameProcessor) parseGRPCEndpoint(endpoint string) (string, credentials.TransportCredentials, error) {
-	if !strings.Contains(endpoint, "://") {
-		if strings.Contains(endpoint, ".") && !strings.Contains(endpoint, ":") {
-			endpoint = "https://" + endpoint + ":443"
-		} else if strings.Contains(endpoint, ":") {
-			parts := strings.Split(endpoint, ":")
-			if len(parts) == 2 {
-				if port, err := strconv.Atoi(parts[1]); err == nil {
-					if port == 443 || port == 8443 || port == 9443 {
-						endpoint = "https://" + endpoint
-					} else {
-						endpoint = "http://" + endpoint
-					}
-				} else {
-					endpoint = "http://" + endpoint
-				}
-			}
-		} else {
-			endpoint = "https://" + endpoint + ":443"
-		}
-	}
-
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return "", nil, fmt.Errorf("invalid endpoint URL: %w", err)
-	}
-
-	host := u.Host
-	if u.Port() == "" {
-		switch u.Scheme {
-		case "https":
-			host = u.Hostname() + ":443"
-		case "http":
-			host = u.Hostname() + ":80"
-		default:
-			return "", nil, fmt.Errorf("unsupported scheme: %s", u.Scheme)
-		}
-	}
-
-	var creds credentials.TransportCredentials
-	switch u.Scheme {
-	case "https":
-		tlsConfig := &tls.Config{ServerName: u.Hostname()}
-		creds = credentials.NewTLS(tlsConfig)
-	case "http":
-		creds = insecure.NewCredentials()
-	default:
-		return "", nil, fmt.Errorf("unsupported scheme: %s (supported: http, https)", u.Scheme)
-	}
-
-	return host, creds, nil
-}
-
+// Shutdown cleans up frame processor resources
 func (fp *FrameProcessor) Shutdown() {
-	if fp.grpcConn != nil {
-		fp.grpcConn.Close()
-		fp.grpcConn = nil
-		fp.grpcClient = nil
+	if fp.aiClient != nil {
+		fp.aiClient.Disconnect()
 	}
 }
 
-// refreshAIConnection ensures the gRPC client state matches current camera AI settings.
-// It lazily connects or disconnects without requiring a pipeline restart so AI can be
-// toggled at runtime smoothly.
-func (fp *FrameProcessor) refreshAIConnection() {
-	if fp.camera == nil {
+// ensureAIConnection manages AI connection state dynamically based on camera settings
+// This allows AI to be toggled on/off without restarting the camera
+func (fp *FrameProcessor) ensureAIConnection() {
+	if fp.camera == nil || fp.aiClient == nil {
 		return
 	}
 
-	// If AI is disabled or endpoint missing, ensure connection is torn down
+	// If AI is disabled or endpoint is missing, disconnect
 	if !fp.camera.AIEnabled || fp.camera.AIEndpoint == "" {
-		if fp.grpcConn != nil || fp.grpcClient != nil {
-			log.Info().Str("camera_id", fp.camera.ID).Msg("AI disabled - closing gRPC connection")
-			fp.Shutdown()
-			fp.aiEndpoint = ""
+		if fp.aiClient.IsConnected() {
+			log.Info().Str("camera_id", fp.camera.ID).Msg("AI disabled - closing connection")
+			fp.aiClient.Disconnect()
 		}
 		return
 	}
 
-	// If AI is enabled, (re)establish connection when needed
-	if fp.grpcClient == nil || fp.aiEndpoint != fp.camera.AIEndpoint {
-		if err := fp.initGRPCConnection(fp.camera.AIEndpoint); err != nil {
-			log.Error().Err(err).Str("camera_id", fp.camera.ID).Str("ai_endpoint", fp.camera.AIEndpoint).Msg("Failed to (re)initialize AI gRPC connection")
-		}
+	// If AI is enabled, ensure connection with auto-retry
+	if err := fp.aiClient.EnsureConnected(fp.camera.AIEndpoint); err != nil {
+		// Error is already logged by AIClient with backoff logic
+		return
 	}
 }
 
@@ -367,7 +273,7 @@ func (fp *FrameProcessor) ProcessFrame(
 	}()
 
 	// Align connection state with current camera settings dynamically
-	fp.refreshAIConnection()
+	fp.ensureAIConnection()
 
 	aiEnabled := fp.cfg.AIEnabled
 	aiTimeout := fp.cfg.AITimeout
@@ -409,20 +315,13 @@ func (fp *FrameProcessor) ProcessFrame(
 	}
 
 	// Try AI processing if conditions are met
-	shouldProcessAI := aiEnabled && len(projects) > 0 && fp.grpcClient != nil
+	shouldProcessAI := aiEnabled && len(projects) > 0 && fp.aiClient != nil && fp.aiClient.IsConnected()
 	if shouldProcessAI {
 		if fp.camera != nil {
 			shouldProcessAI = (fp.camera.AIFrameCounter % int64(aiFrameInterval)) == 0
 		} else {
 			shouldProcessAI = (rawFrame.FrameID % int64(aiFrameInterval)) == 0
 		}
-		if fp.grpcConn.GetState() != connectivity.Ready {
-			shouldProcessAI = false
-		}
-
-		//TODO : Optimize this
-		// Check if GRPC is healthy
-		// healthy, err := fp.grpcClient.HealthCheck(context.Background(), &pb.Empty{})
 		// if err != nil {
 		// 	shouldProcessAI = false
 		// }
@@ -492,25 +391,20 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 
 	jpegBytes := buf.GetBytes()
 
-	// fmt.Println("Camera ID", rawFrame.CameraID)
-	// fmt.Println("Projects", projects)
-
-	// reqRight := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: []string{"drone_person_counter"}}
 	req := &pb.FrameRequest{Image: jpegBytes, CameraId: rawFrame.CameraID, ProjectNames: projects}
 
 	ctx, cancel := context.WithTimeout(context.Background(), aiTimeout)
 	defer cancel()
 
-	// log.Info().Msgf("AI request: %v %v", req.ProjectNames, req.CameraId)
-
-	resp, err := fp.grpcClient.InferDetection(ctx, req)
+	// Call AI service using the dedicated AI client with auto-retry
+	resp, err := fp.aiClient.InferDetection(ctx, req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("AI service call failed: %v", err)
 		log.Warn().
 			Err(err).
 			Str("camera_id", rawFrame.CameraID).
 			Dur("timeout", aiTimeout).
-			Msg("AI gRPC call failed (stream continues)")
+			Msg("AI inference failed (stream continues, will auto-retry)")
 		return result
 	}
 

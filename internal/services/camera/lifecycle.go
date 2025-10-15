@@ -473,9 +473,6 @@ func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
 	var processedFrame *models.ProcessedFrame
 
 	if processor != nil {
-		// Measure AI processing time for debugging delay
-		aiStartTime := time.Now()
-
 		// Try frame processing with error protection
 		func() {
 			defer func() {
@@ -490,18 +487,6 @@ func (cl *CameraLifecycle) processFrame(rawFrame *models.RawFrame) {
 
 			processedFrame = processor.ProcessFrame(rawFrame, cl.camera.Projects, cl.camera.CameraSolutions, cl.camera.ROIData, cl.camera.FPS, cl.camera.Latency)
 		}()
-
-		aiProcessingDuration := time.Since(aiStartTime)
-
-		if aiProcessingDuration > 100*time.Millisecond {
-			log.Debug().
-				Str("camera_id", cl.camera.ID).
-				Int64("frame_id", rawFrame.FrameID).
-				Dur("ai_processing_time", aiProcessingDuration).
-				Dur("frame_age_when_processed", time.Since(rawFrame.Timestamp)).
-				Bool("ai_enabled", cl.camera.AIEnabled).
-				Msg("AI processing took significant time")
-		}
 	}
 
 	// Fallback if processor failed or doesn't exist
