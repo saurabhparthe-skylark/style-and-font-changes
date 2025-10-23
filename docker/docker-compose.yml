@@ -43,7 +43,7 @@ services:
       start_period: 30s
   
   kepler-mediamtx:
-    image: bluenviron/mediamtx:latest-ffmpeg
+    image: bluenviron/mediamtx:1
     container_name: kepler-mediamtx
     volumes:
       - ./configs/mediamtx.yml:/mediamtx.yml:ro

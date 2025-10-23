@@ -43,7 +43,6 @@ type Config struct {
 	// Streaming Configuration
 	RTSPTimeout       time.Duration
 	MaxRetries        int
-	MaxCameras        int
 	ReconnectInterval time.Duration
 
 	// New: Backoff/Jitter config for reconnections
@@ -182,7 +181,6 @@ func Load() *Config {
 		// Streaming Configuration
 		RTSPTimeout:       getEnvDuration("RTSP_TIMEOUT", 10*time.Second),
 		MaxRetries:        getEnvInt("MAX_RETRIES", 3),
-		MaxCameras:        getEnvInt("MAX_CAMERAS", 10),
 		ReconnectInterval: getEnvDuration("RECONNECT_INTERVAL", 5*time.Second),
 
 		// Backoff/Jitter

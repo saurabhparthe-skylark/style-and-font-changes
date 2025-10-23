@@ -18,9 +18,12 @@ import (
 	"kepler-worker-go/internal/models"
 )
 
-// Service handles video capture operations
+// Service handles video capture operations with per-camera isolation
 type Service struct {
 	cfg *config.Config
+	// Per-service (per-camera) capture state - NOT GLOBAL
+	activeCaptureEntry *activeCaptureEntry
+	activeCaptureMu    sync.Mutex
 }
 
 type activeCaptureEntry struct {
@@ -28,11 +31,12 @@ type activeCaptureEntry struct {
 	done      chan struct{}
 	startTime time.Time
 	cap       *gocv.VideoCapture
+	cameraID  string
 }
 
 var (
-	activeCaptureMu sync.Mutex
-	activeCaptures  = make(map[string]*activeCaptureEntry)
+	// Only FFmpeg config should be global (configured once)
+	ffmpegConfigured sync.Once
 )
 
 // NewService creates a new stream capture service
@@ -42,180 +46,178 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
-// StopCameraCapture forcefully stops a camera's capture process
+// StopCameraCapture forcefully stops this service's capture process
 func (s *Service) StopCameraCapture(cameraID string) {
-	activeCaptureMu.Lock()
-	defer activeCaptureMu.Unlock()
+	s.activeCaptureMu.Lock()
+	defer s.activeCaptureMu.Unlock()
 
-	if existing, ok := activeCaptures[cameraID]; ok {
+	if s.activeCaptureEntry != nil && s.activeCaptureEntry.cameraID == cameraID {
 		log.Info().
 			Str("camera_id", cameraID).
-			Dur("runtime", time.Since(existing.startTime)).
+			Dur("runtime", time.Since(s.activeCaptureEntry.startTime)).
 			Msg("Force stopping camera capture")
 
 		// Cancel the context
-		if existing.cancel != nil {
-			existing.cancel()
+		if s.activeCaptureEntry.cancel != nil {
+			s.activeCaptureEntry.cancel()
 		}
 
-		// Do not delete immediately; allow the capture goroutine to exit and clean up
-		// Optionally wait briefly for it to signal done (non-blocking to callers of this function)
+		// Wait briefly for it to signal done
 		select {
-		case <-existing.done:
+		case <-s.activeCaptureEntry.done:
 		case <-time.After(2 * time.Second):
 		}
 	}
 }
 
-// CleanupAllCaptures stops all active captures (useful for shutdown)
+// CleanupAllCaptures stops this service's active capture (useful for shutdown)
 func (s *Service) CleanupAllCaptures() {
-	activeCaptureMu.Lock()
-	defer activeCaptureMu.Unlock()
+	s.activeCaptureMu.Lock()
+	defer s.activeCaptureMu.Unlock()
 
-	log.Info().
-		Int("active_captures", len(activeCaptures)).
-		Msg("Cleaning up all active captures")
+	if s.activeCaptureEntry != nil {
+		log.Info().
+			Str("camera_id", s.activeCaptureEntry.cameraID).
+			Msg("Cleaning up camera capture")
 
-	for cameraID, existing := range activeCaptures {
-		if existing.cancel != nil {
-			existing.cancel()
+		if s.activeCaptureEntry.cancel != nil {
+			s.activeCaptureEntry.cancel()
 		}
 
-		log.Debug().
-			Str("camera_id", cameraID).
-			Msg("Cleaned up capture")
+		s.activeCaptureEntry = nil
 	}
-
-	// Clear the map
-	activeCaptures = make(map[string]*activeCaptureEntry)
 }
 
-// GetActiveCaptureCount returns the number of active captures (for monitoring)
+// GetActiveCaptureCount returns 1 if this service has an active capture, 0 otherwise
 func (s *Service) GetActiveCaptureCount() int {
-	activeCaptureMu.Lock()
-	defer activeCaptureMu.Unlock()
-	return len(activeCaptures)
+	s.activeCaptureMu.Lock()
+	defer s.activeCaptureMu.Unlock()
+	if s.activeCaptureEntry != nil {
+		return 1
+	}
+	return 0
 }
 
-// CleanupStaleCaptures removes captures that have been running too long without activity
+// CleanupStaleCaptures removes this service's capture if it's stale
 func (s *Service) CleanupStaleCaptures(maxAge time.Duration) {
-	activeCaptureMu.Lock()
-	defer activeCaptureMu.Unlock()
+	s.activeCaptureMu.Lock()
+	defer s.activeCaptureMu.Unlock()
 
-	now := time.Now()
-	for cameraID, existing := range activeCaptures {
-		age := now.Sub(existing.startTime)
+	if s.activeCaptureEntry != nil {
+		now := time.Now()
+		age := now.Sub(s.activeCaptureEntry.startTime)
 		if age > maxAge {
 			log.Warn().
-				Str("camera_id", cameraID).
+				Str("camera_id", s.activeCaptureEntry.cameraID).
 				Dur("age", age).
 				Dur("max_age", maxAge).
 				Msg("Cleaning up stale capture")
 
-			if existing.cancel != nil {
-				existing.cancel()
+			if s.activeCaptureEntry.cancel != nil {
+				s.activeCaptureEntry.cancel()
 			}
-			// Do not delete immediately; let the goroutine's deferred cleanup remove the entry
 		}
 	}
 }
 
 // StartVideoCaptureProcess starts OpenCV VideoCapture for a camera
 func (s *Service) StartVideoCaptureProcess(ctx context.Context, camera *models.Camera) error {
-	// Per-camera guard: ensure only one active capture exists
+	// Per-service guard: ensure only one active capture per service
 	runCtx, runCancel := context.WithCancel(ctx)
-	var entry *activeCaptureEntry
 	var cap *gocv.VideoCapture
 
-	// Always release runCancel; entry cleanup happens only if created
+	// Always release runCancel and cleanup
 	defer func() {
 		runCancel()
 
 		// Ensure VideoCapture is properly closed
 		if cap != nil && cap.IsOpened() {
+			log.Debug().Str("camera_id", camera.ID).Msg("Closing VideoCapture")
 			cap.Close()
+			log.Debug().Str("camera_id", camera.ID).Msg("VideoCapture closed")
 		}
 
-		activeCaptureMu.Lock()
-		if entry != nil {
-			if cur, ok := activeCaptures[camera.ID]; ok && cur == entry {
-				delete(activeCaptures, camera.ID)
-			}
-			close(entry.done)
+		// Clean up per-service entry
+		s.activeCaptureMu.Lock()
+		if s.activeCaptureEntry != nil && s.activeCaptureEntry.cameraID == camera.ID {
+			close(s.activeCaptureEntry.done)
+			s.activeCaptureEntry = nil
 		}
-		activeCaptureMu.Unlock()
+		s.activeCaptureMu.Unlock()
 	}()
 
-	// Clean up any existing capture first
-	activeCaptureMu.Lock()
-	if existing, ok := activeCaptures[camera.ID]; ok {
+	// Clean up any existing capture in THIS service first
+	s.activeCaptureMu.Lock()
+	if s.activeCaptureEntry != nil {
 		log.Info().
 			Str("camera_id", camera.ID).
-			Dur("previous_runtime", time.Since(existing.startTime)).
-			Msg("Stopping existing capture before starting new one")
+			Dur("previous_runtime", time.Since(s.activeCaptureEntry.startTime)).
+			Msg("Stopping existing capture in this service before starting new one")
 
 		// Signal previously running capture to stop
-		if existing.cancel != nil {
-			existing.cancel()
+		if s.activeCaptureEntry.cancel != nil {
+			s.activeCaptureEntry.cancel()
 		}
 
-		prevDone := existing.done
-		activeCaptureMu.Unlock()
+		prevDone := s.activeCaptureEntry.done
+		s.activeCaptureMu.Unlock()
 
 		// Wait for prior capture to fully release resources
-		waitTimeout := 35 * time.Second
+		waitTimeout := 5 * time.Second
 		select {
 		case <-prevDone:
 			log.Info().
 				Str("camera_id", camera.ID).
-				Msg("Previous capture closed successfully")
+				Msg("Previous capture in this service closed successfully")
 		case <-time.After(waitTimeout):
-			log.Error().
+			log.Warn().
 				Str("camera_id", camera.ID).
 				Dur("timeout", waitTimeout).
-				Msg("Previous capture failed to close within timeout - will retry later to avoid concurrent Close/Read")
-			return fmt.Errorf("previous capture for camera %s did not close within timeout", camera.ID)
+				Msg("Previous capture did not close within timeout - proceeding anyway as this is per-service")
 		case <-ctx.Done():
 			return nil
 		}
 
-		// Add a small delay to ensure FFmpeg process is fully terminated
-		time.Sleep(500 * time.Millisecond)
+		// Small delay to ensure cleanup
+		time.Sleep(200 * time.Millisecond)
 
-		activeCaptureMu.Lock()
+		s.activeCaptureMu.Lock()
 	}
 
-	// Create new entry
-	entry = &activeCaptureEntry{
+	// Create new entry for THIS service
+	entry := &activeCaptureEntry{
 		cancel:    runCancel,
 		done:      make(chan struct{}),
 		startTime: time.Now(),
 		cap:       nil, // Will be set after successful open
+		cameraID:  camera.ID,
 	}
-	activeCaptures[camera.ID] = entry
-	activeCaptureMu.Unlock()
+	s.activeCaptureEntry = entry
+	s.activeCaptureMu.Unlock()
 
 	log.Info().
 		Str("camera_id", camera.ID).
 		Str("url", camera.URL).
-		Msg("Starting OpenCV VideoCapture with optimized FFmpeg settings")
+		Msg("Starting OpenCV VideoCapture with optimized FFmpeg settings (per-service isolation)")
 
-	// Configure FFmpeg options for OpenCV (similar to Python implementation)
-	s.configureFFmpegOptions()
+	// Configure FFmpeg options ONCE globally (only env var setup)
+	ffmpegConfigured.Do(func() {
+		s.configureFFmpegOptions()
+	})
 
-	// Create VideoCapture - handle webcam vs RTSP
+	// Create VideoCapture - each service has its own isolated instance
 	var err error
-
 	cap, err = gocv.OpenVideoCaptureWithAPI(camera.URL, gocv.VideoCaptureFFmpeg)
 	if err != nil {
 		return fmt.Errorf("failed to open RTSP stream %s: %w", camera.URL, err)
 	}
 
-	activeCaptureMu.Lock()
-	if entry != nil {
-		entry.cap = cap
+	// Store cap reference in per-service entry
+	s.activeCaptureMu.Lock()
+	if s.activeCaptureEntry != nil {
+		s.activeCaptureEntry.cap = cap
 	}
-	activeCaptureMu.Unlock()
+	s.activeCaptureMu.Unlock()
 
 	s.configureVideoCaptureProperties(cap)
 
@@ -431,8 +433,9 @@ func (s *Service) CalculateBackoffDelay(attempt int) time.Duration {
 }
 
 // configureFFmpegOptions sets comprehensive FFmpeg options via environment variables
+// WARNING: This should only be called ONCE via sync.Once to avoid race conditions between cameras
 func (s *Service) configureFFmpegOptions() {
-	log.Info().Msg("Configuring optimized FFmpeg options for OpenCV to avoid grey frames")
+	log.Info().Msg("Configuring optimized FFmpeg options GLOBALLY for OpenCV (called once)")
 
 	ffmpegOptions := map[string]string{
 		"rtsp_transport":              "tcp",
@@ -506,8 +509,12 @@ func (s *Service) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCh
 
 	log.Info().Str("rtsp_url", rtspURL).Msg("Starting RTSP validation")
 
-	s.configureFFmpegOptions()
+	// Configure FFmpeg options ONCE globally
+	ffmpegConfigured.Do(func() {
+		s.configureFFmpegOptions()
+	})
 
+	// Open VideoCapture for validation (temporary instance)
 	cap, err := gocv.OpenVideoCaptureWithAPI(rtspURL, gocv.VideoCaptureFFmpeg)
 	if err != nil {
 		response.ErrorDetail = fmt.Sprintf("Failed to open RTSP stream: %v", err)

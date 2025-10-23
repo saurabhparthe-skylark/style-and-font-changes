@@ -500,29 +500,18 @@ func (s *Service) processSuppression(detection models.Detection, decision models
 // getDetectionType determines the detection type based on project name and label
 func (s *Service) getDetectionType(projectName, label string) models.DetectionType {
 	projectLower := strings.ToLower(projectName)
-	// labelLower := strings.ToLower(label)
 
-	// Project name based mapping (primary)
-	switch {
-	case strings.Contains(projectLower, "drone_intrusion_detection") || strings.Contains(projectLower, "thermal_intrusion_detection"):
+	switch projectLower {
+	case "drone_intrusion_detection", "drone_thermal_intrusion_detection", "cctv_intrusion_detection":
 		return models.DetectionTypeIntrusion
-	case strings.Contains(projectLower, "drone_ppe_detection"):
+	case "drone_ppe_detection", "cctv_ppe_detection", "cctv_helmet_detection", "fovea_helmet_detection":
 		return models.DetectionTypePPE
-	case strings.Contains(projectLower, "drone_fire_smoke_detection"):
+	case "drone_fire_smoke_detection", "cctv_fire_smoke_detection":
 		return models.DetectionTypeFireSmoke
-
-		// case strings.Contains(projectLower, "ppe_detection") || strings.Contains(projectLower, "ppe_detection_lr") || strings.Contains(projectLower, "ppe_detection_new"):
-		// 	return models.DetectionTypePPE``
-		// case strings.Contains(projectLower, "cellphone"):
-		// 	return models.DetectionTypeCellphone
-		// case strings.Contains(projectLower, "drone") || strings.Contains(projectLower, "aircraft"):
-		// 	return models.DetectionTypeDrone
-		// case strings.Contains(projectLower, "vehicle_detection_s") || strings.Contains(projectLower, "vehicle_detection_lr"):
-		// 	return models.DetectionTypeVehicle
-		// case strings.Contains(projectLower, "fire_smoke"):
-		// 	return models.DetectionTypeFireSmoke
-		// case strings.Contains(projectLower, "person_detection") || strings.Contains(projectLower, "people_counter") || strings.Contains(projectLower, "person_detection_lr") || strings.Contains(projectLower, "person_detection_sr"):
-		// 	return models.DetectionTypePerson
+	case "drone_person_counter", "drone_crowd_detection", "cctv_person_counter":
+		return models.DetectionTypePerson
+	case "cctv_anpr_detection", "cctv_tripling_alert", "fovea_anpr_detection", "fovea_redlight_detection", "fovea_speed_detection", "fovea_tripling_detection", "fovea_wrong_lane_detection":
+		return models.DetectionTypeVehicle
 	}
 
 	return models.DetectionTypeGeneral

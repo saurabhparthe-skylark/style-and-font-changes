@@ -24,6 +24,11 @@ import (
 	"kepler-worker-go/internal/models"
 )
 
+// Global - prevents killing other cameras when new camera starts
+var (
+	mediaMTXCleanupOnce sync.Once
+)
+
 type Publisher struct {
 	cfg *config.Config
 
@@ -70,9 +75,11 @@ func NewPublisher(cfg *config.Config) (*Publisher, error) {
 		cameraSource: make(map[string]string),
 	}
 
-	// Clean up any stale sessions from previous runs
-	log.Info().Msg("Cleaning up stale MediaMTX sessions from previous runs")
-	publisher.cleanupAllMediaMTXSessions()
+	// Clean up stale sessions ONCE at startup to prevent killing active cameras
+	mediaMTXCleanupOnce.Do(func() {
+		log.Info().Msg("Cleaning up stale MediaMTX sessions (ONE TIME ONLY)")
+		publisher.cleanupAllMediaMTXSessions()
+	})
 
 	log.Info().
 		Str("mediamtx_url", cfg.MediaMTXURL).

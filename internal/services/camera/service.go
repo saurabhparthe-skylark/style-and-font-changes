@@ -41,7 +41,6 @@ func NewCameraManager(cfg *config.Config, postProcessingSvc *postprocessing.Serv
 	}
 
 	log.Info().
-		Int("max_cameras", cfg.MaxCameras).
 		Int("max_fps_no_ai", cfg.MaxFPSNoAI).
 		Int("max_fps_with_ai", cfg.MaxFPSWithAI).
 		Bool("ai_enabled", cfg.AIEnabled).
@@ -76,11 +75,6 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		// Wait for complete cleanup
 		time.Sleep(200 * time.Millisecond)
 		delete(cm.cameras, req.CameraID)
-	}
-
-	// Validate maximum cameras
-	if len(cm.cameras) >= cm.cfg.MaxCameras {
-		return fmt.Errorf("maximum number of cameras (%d) reached", cm.cfg.MaxCameras)
 	}
 
 	// Configure AI settings with defaults from config
@@ -135,6 +129,7 @@ func (cm *CameraManager) StartCamera(req *models.CameraRequest) error {
 		CameraSolutions: req.CameraSolutions,
 		ROIData:         req.ROIData,
 		Projects:        projects,
+
 		// FPS Calculation setup
 		RecentFrameTimes: make([]time.Time, 0, 30),
 		FPSWindowSize:    30,
