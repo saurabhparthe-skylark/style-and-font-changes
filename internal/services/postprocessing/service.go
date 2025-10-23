@@ -508,10 +508,6 @@ func (s *Service) getDetectionType(projectName, label string) models.DetectionTy
 		return models.DetectionTypePPE
 	case "drone_fire_smoke_detection", "cctv_fire_smoke_detection":
 		return models.DetectionTypeFireSmoke
-	case "drone_person_counter", "drone_crowd_detection", "cctv_person_counter":
-		return models.DetectionTypePerson
-	case "cctv_anpr_detection", "cctv_tripling_alert", "fovea_anpr_detection", "fovea_redlight_detection", "fovea_speed_detection", "fovea_tripling_detection", "fovea_wrong_lane_detection":
-		return models.DetectionTypeVehicle
 	}
 
 	return models.DetectionTypeGeneral
