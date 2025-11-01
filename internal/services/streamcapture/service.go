@@ -531,7 +531,7 @@ func (s *Service) ValidateRTSPAndCaptureThumbnail(rtspURL string) *models.RTSPCh
 		return response
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	frame := gocv.NewMat()
