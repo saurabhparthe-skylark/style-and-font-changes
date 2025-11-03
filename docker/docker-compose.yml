@@ -49,7 +49,15 @@ services:
       - ./configs/mediamtx.yml:/mediamtx.yml:ro
       - ./data/mediamtx/recordings:/recordings
       - ./logs/mediamtx:/logs
-    network_mode: host
+    # network_mode: host
+    ports:
+      - "9997:9997" #API
+      - "9998:9998" #Metrics
+      - "8554:8554" #RTSP
+      - "8888:8888" #HLS
+      - "8889:8889" #WebRTC
+      - "8200:8200" #WebRTC UDP
+      - "8201:8201" #WebRTC TCP
     restart: unless-stopped
     healthcheck:
       test: ['CMD', '/mediamtx', '--version']
