@@ -88,11 +88,12 @@ tools:
 
 ## Build Docker image using docker-compose
 docker-build:
-	cd docker && docker compose build --build-arg VERSION=$(VERSION)
-	docker tag $(DOCKER_REGISTRY)/kepler-worker-go:$(VERSION) $(DOCKER_REGISTRY)/kepler-worker-go:latest
+	cd infra && docker compose build --build-arg VERSION=$(VERSION)
+	docker tag kepler-worker-kepler-worker:latest $(DOCKER_REGISTRY)/kepler-worker-go:$(VERSION)
+	docker tag kepler-worker-kepler-worker:latest $(DOCKER_REGISTRY)/kepler-worker-go:latest
 
 docker-run:
-	cd docker && docker compose up -d
+	cd infra && docker compose up -d
 
 ## Push Docker image to Docker Hub
 docker-push:
@@ -102,6 +103,6 @@ docker-push:
 ## Build static Docker image and extract binary
 docker-build-static:
 	@mkdir -p $(BIN_DIR)
-	docker build -f docker/Dockerfile.static -t kepler-worker-static:$(VERSION) --build-arg VERSION=$(VERSION) .
+	docker build -f infra/docker/Dockerfile.static -t kepler-worker-static:$(VERSION) --build-arg VERSION=$(VERSION) .
 	docker run --rm -v $(PWD)/$(BIN_DIR):/output kepler-worker-static:$(VERSION) cp /kepler-worker-static /output/kepler-worker-static
 

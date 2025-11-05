@@ -1,10 +1,11 @@
+name: kepler-worker
+
 services:
   kepler-worker:
-    # image: skylarklabs/kepler-worker-go:${VERSION:-1.0.0}
     container_name: kepler-worker-go
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: infra/docker/Dockerfile
       args:
         - VERSION=${VERSION:-1.0.0}
     environment:
@@ -13,7 +14,7 @@ services:
       - PUBLISHING_FPS=30
       - NATS_URL=nats://172.17.0.1:4222
       - AI_GRPC_URL=49.248.155.76:50052
-      - MEDIAMTX_URL=http://localhost:8889
+      - MEDIAMTX_URL=http://mediamtx:8889
       - SHOW_METADATA=true
       - SHOW_CAMERA_ID=false
       - SHOW_FRAME_ID=false
@@ -30,11 +31,16 @@ services:
       - OVERLAY_COLOR="#FFFFFF"
       - OVERLAY_FONT=2
     ports:
-      - "8000:8000"    # Main API
-      - "8080:8080"    # Logdy web interface (if enabled)
+      - "8000:8000"
+      - "8080:8080"
     volumes:
       - kepler-videos:/app/kepler-videos
+    networks:
+      - worker
     restart: unless-stopped
+    depends_on:
+      mediamtx:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -42,22 +48,23 @@ services:
       retries: 3
       start_period: 30s
   
-  kepler-mediamtx:
+  mediamtx:
     image: bluenviron/mediamtx:1
-    container_name: kepler-mediamtx
+    container_name: worker-mediamtx
     volumes:
-      - ./configs/mediamtx.yml:/mediamtx.yml:ro
-      - ./data/mediamtx/recordings:/recordings
-      - ./logs/mediamtx:/logs
-    # network_mode: host
+      - ./data/dev/configs/mediamtx.yml:/mediamtx.yml:ro
+      - ./data/dev/mediamtx/recordings:/recordings
+      - ./data/dev/logs/mediamtx:/logs
     ports:
-      - "9997:9997" #API
-      - "9998:9998" #Metrics
-      - "8554:8554" #RTSP
-      - "8888:8888" #HLS
-      - "8889:8889" #WebRTC
-      - "8200:8200" #WebRTC UDP
-      - "8201:8201" #WebRTC TCP
+      - "9997:9997"
+      - "9998:9998"
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+      - "8200:8200"
+      - "8201:8201"
+    networks:
+      - worker
     restart: unless-stopped
     healthcheck:
       test: ['CMD', '/mediamtx', '--version']
@@ -69,5 +76,8 @@ services:
 volumes:
   kepler-videos:
     driver: local
-  kepler-logs:
-    driver: local
+
+networks:
+  worker:
+    name: kepler_worker_network
+    driver: bridge

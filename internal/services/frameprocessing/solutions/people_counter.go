@@ -11,13 +11,13 @@ import (
 )
 
 // DrawPeopleCounter draws people counting overlay with beautiful design
-func DrawPeopleCounter(mat *gocv.Mat, solution models.SolutionResults, y *int) {
+func DrawPeopleCounter(header string, mat *gocv.Mat, solution models.SolutionResults, y *int) {
 	if mat == nil {
 		return
 	}
 
 	// Title header with beautiful styling
-	headerText := "PEOPLE COUNTER"
+	headerText := header + " PEOPLE COUNTER"
 	DrawTextEnhanced(mat, headerText, 15, *y, color.RGBA{R: 0, G: 255, B: 255, A: 255}, 0.8, 2)
 	*y += 35
 

@@ -58,7 +58,7 @@ func DrawCrowdDetection(mat *gocv.Mat, solution models.SolutionResults, y *int) 
 		crowdInfoText := fmt.Sprintf("Area %d: %d people (%s)", i+1, crowd.Count, crowd.AlertLevel)
 		textColor := getCrowdTextColor(crowd.AlertLevel)
 		DrawText(mat, crowdInfoText, 15, *y, textColor)
-		*y += 25
+		*y += 30
 	}
 
 	// Add spacing after crowd detection info
