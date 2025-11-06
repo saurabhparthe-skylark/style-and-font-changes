@@ -122,16 +122,26 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 		return
 	}
 	colors := map[string]color.RGBA{
-		"person":        {R: 0, G: 255, B: 0, A: 255},
-		"face":          {R: 255, G: 255, B: 0, A: 255},
-		"vehicle":       {R: 0, G: 165, B: 255, A: 255},
-		"car":           {R: 0, G: 140, B: 255, A: 255},
-		"truck":         {R: 0, G: 100, B: 255, A: 255},
+		"person": {R: 0, G: 0, B: 255, A: 255},
+
+		"vehicle":           {R: 0, G: 255, B: 0, A: 255},
+		"motorcycle":        {R: 0, G: 255, B: 0, A: 255},
+		"machinary-vehicle": {R: 0, G: 255, B: 0, A: 255},
+		"truck":             {R: 0, G: 255, B: 0, A: 255},
+		"3wheeler":          {R: 0, G: 255, B: 0, A: 255},
+		"car":               {R: 0, G: 255, B: 0, A: 255},
+		"bicycle":           {R: 0, G: 255, B: 0, A: 255},
+		"van":               {R: 0, G: 255, B: 0, A: 255},
+
 		"license_plate": {R: 255, G: 0, B: 255, A: 255},
 		"numberplate":   {R: 255, G: 0, B: 255, A: 255},
-		"default":       {R: 0, G: 0, B: 255, A: 255},
+
+		"default": {R: 0, G: 0, B: 255, A: 255},
 	}
 	for _, det := range detections {
+
+		// fmt.Println(det.ProjectName, " ", det.Label)
+
 		if det.IsSuppressed || det.TrueSuppressed {
 			continue
 		}
@@ -148,69 +158,73 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 		if c, exists := colors[det.Label]; exists {
 			detColor = c
 		}
-		if det.Score < 0.5 {
-			detColor.A = 128
-		}
 
 		// gocv.Rectangle(mat, image.Rect(x1, y1, x2, y2), detColor, 2)
 		// cornerLength := 15
 		// cornerThickness := 3
 
 		// Premium adaptive thickness based on object size and type
-		boxWidth := x2 - x1
-		boxHeight := y2 - y1
-		boxArea := boxWidth * boxHeight
+		// boxWidth := x2 - x1
+		// boxHeight := y2 - y1
+		// boxArea := boxWidth * boxHeight
 
 		var thickness int
-		var useCorners bool
-		var cornerLength int
+		// var useCorners bool
+		// var cornerLength int
+
+		thickness = 2 // Crisp thin border
+		// useCorners = false // No corners for very small objects
 
 		// Crisp, sharp borders - no blurry 1px lines
-		if det.Label == "license_plate" || det.Label == "numberplate" {
-			thickness = 2      // Crisp thin border
-			useCorners = false // No corners for very small objects
-		} else if det.Label == "face" || boxArea < 1500 { // Very small objects
-			thickness = 2      // Crisp thin border
-			useCorners = false // No corners to avoid hashtag effect
-		} else if boxArea < 5000 { // Small objects
-			thickness = 2 // Crisp thin border
-			useCorners = true
-			cornerLength = 6 // Very subtle corners
-		} else if boxArea < 15000 { // Medium objects
-			thickness = 2 // Crisp thin border
-			useCorners = true
-			cornerLength = 8
-		} else { // Large objects
-			thickness = 3 // Slightly thicker for large objects
-			useCorners = true
-			cornerLength = 10
-		}
+		// if det.Label == "license_plate" || det.Label == "numberplate" {
+		// 	thickness = 2      // Crisp thin border
+		// 	useCorners = false // No corners for very small objects
+		// } else if det.Label == "face" || boxArea < 1500 { // Very small objects
+		// 	thickness = 2      // Crisp thin border
+		// 	useCorners = false // No corners to avoid hashtag effect
+		// } else if boxArea < 5000 { // Small objects
+		// 	thickness = 2 // Crisp thin border
+		// 	useCorners = true
+		// 	cornerLength = 6 // Very subtle corners
+		// } else if boxArea < 15000 { // Medium objects
+		// 	thickness = 2 // Crisp thin border
+		// 	useCorners = true
+		// 	cornerLength = 8
+		// } else { // Large objects
+		// 	thickness = 3 // Slightly thicker for large objects
+		// 	useCorners = true
+		// 	cornerLength = 10
+		// }
 
 		// Draw main rectangle with thin, elegant border
 		gocv.Rectangle(mat, image.Rect(x1, y1, x2, y2), detColor, thickness)
 
 		// Draw subtle corner accents only for medium/large objects
-		if useCorners && cornerLength > 0 {
-			// Make corners crisp and sharp - no blurry 1px lines
-			cornerThickness := 2
+		// if useCorners && cornerLength > 0 {
+		// 	// Make corners crisp and sharp - no blurry 1px lines
+		// 	cornerThickness := 2
 
-			// Ensure corners don't extend too far on small boxes
-			maxCornerLength := min(cornerLength, min(boxWidth/4, boxHeight/4))
-			if maxCornerLength >= 3 { // Only draw if meaningful size
-				// Top-left corner
-				gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1+maxCornerLength, y1), detColor, cornerThickness)
-				gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1, y1+maxCornerLength), detColor, cornerThickness)
-				// Top-right corner
-				gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2-maxCornerLength, y1), detColor, cornerThickness)
-				gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2, y1+maxCornerLength), detColor, cornerThickness)
-				// Bottom-left corner
-				gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1+maxCornerLength, y2), detColor, cornerThickness)
-				gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1, y2-maxCornerLength), detColor, cornerThickness)
-				// Bottom-right corner
-				gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2-maxCornerLength, y2), detColor, cornerThickness)
-				gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2, y2-maxCornerLength), detColor, cornerThickness)
-			}
-		}
+		// 	// Ensure corners don't extend too far on small boxes
+		// 	maxCornerLength := min(cornerLength, min(boxWidth/4, boxHeight/4))
+		// 	if maxCornerLength >= 3 { // Only draw if meaningful size
+		// 		// Top-left corner
+		// 		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1+maxCornerLength, y1), detColor, cornerThickness)
+		// 		gocv.Line(mat, image.Pt(x1, y1), image.Pt(x1, y1+maxCornerLength), detColor, cornerThickness)
+		// 		// Top-right corner
+		// 		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2-maxCornerLength, y1), detColor, cornerThickness)
+		// 		gocv.Line(mat, image.Pt(x2, y1), image.Pt(x2, y1+maxCornerLength), detColor, cornerThickness)
+		// 		// Bottom-left corner
+		// 		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1+maxCornerLength, y2), detColor, cornerThickness)
+		// 		gocv.Line(mat, image.Pt(x1, y2), image.Pt(x1, y2-maxCornerLength), detColor, cornerThickness)
+		// 		// Bottom-right corner
+		// 		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2-maxCornerLength, y2), detColor, cornerThickness)
+		// 		gocv.Line(mat, image.Pt(x2, y2), image.Pt(x2, y2-maxCornerLength), detColor, cornerThickness)
+		// 	}
+
+		// }
+
+		// Print Track ID
+		gocv.PutText(mat, fmt.Sprintf("%d", det.TrackID), image.Pt(x1, y1), gocv.FontHersheySimplex, 0.4, detColor, 2)
 	}
 }
 
@@ -237,7 +251,12 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 
 		case "drone_crowd_detection":
 			if solution, exists := solutionsMap["drone_crowd_detection"]; exists {
-				solutions.DrawCrowdDetection(mat, solution, &y)
+				solutions.DrawPeopleCrowdDetection(mat, solution, &y)
+			}
+
+		case "drone_vehicle_crowd":
+			if solution, exists := solutionsMap["drone_vehicle_crowd"]; exists {
+				solutions.DrawVehicleCrowdDetection(mat, solution, &y)
 			}
 
 		case "drone_person_counter":
@@ -248,6 +267,11 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 		case "cctv_person_counter":
 			if solution, exists := solutionsMap["cctv_person_counter"]; exists {
 				solutions.DrawPeopleCounter("CCTV", mat, solution, &y)
+			}
+
+		case "drone_vehicle_counter":
+			if solution, exists := solutionsMap["drone_vehicle_counter"]; exists {
+				solutions.DrawVehicleCounter("DRONE", mat, solution, &y)
 			}
 		}
 	}
@@ -470,10 +494,16 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 		if projectDetections.Solutions != nil {
 			for solutionKey, solutionData := range projectDetections.Solutions {
 				solutionResult := models.SolutionResults{
-					PeopleCurrentCount:   solutionData.GetCurrentCount(),
-					PeopleTotalCount:     solutionData.GetTotalCount(),
-					PeopleMaxCount:       solutionData.GetMaxCount(),
-					PeopleOutCount:       solutionData.GetOutRegionCount(),
+					PeopleCurrentCount: solutionData.GetCurrentCount(),
+					PeopleTotalCount:   solutionData.GetTotalCount(),
+					PeopleMaxCount:     solutionData.GetMaxCount(),
+					PeopleOutCount:     solutionData.GetOutRegionCount(),
+
+					VehicleCurrentCount: solutionData.GetVehicleCurrentCount(),
+					VehicleTotalCount:   solutionData.GetVehicleTotalCount(),
+					VehicleMaxCount:     solutionData.GetVehicleMaxCount(),
+					VehicleOutCount:     solutionData.GetVehicleOutRegionCount(),
+
 					PPEViolationDetected: solutionData.ViolationDetected,
 					IntrusionDetected:    solutionData.IntrusionDetected,
 				}
@@ -491,6 +521,21 @@ func (fp *FrameProcessor) extractDetectionsFromResponse(resp *pb.DetectionRespon
 					solutionResult.CrowdDetection = &models.CrowdDetectionResult{
 						Crowds:           crowds,
 						TotalCrowdPeople: crowdData.GetTotalCrowdPeople(),
+					}
+				}
+
+				if vehicleCrowdData := solutionData.GetVehicleCrowdDetection(); vehicleCrowdData != nil {
+					var crowds []models.VehicleCrowdInfo
+					for _, crowd := range vehicleCrowdData.GetCrowds() {
+						crowds = append(crowds, models.VehicleCrowdInfo{
+							Rectangle:  crowd.GetRectangle(),
+							Count:      crowd.GetCount(),
+							AlertLevel: crowd.GetAlertLevel(),
+						})
+					}
+					solutionResult.VehicleCrowdDetection = &models.VehicleCrowdDetectionResult{
+						Crowds:             crowds,
+						TotalCrowdVehicles: vehicleCrowdData.GetTotalCrowdVehicles(),
 					}
 				}
 

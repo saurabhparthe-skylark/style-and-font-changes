@@ -310,13 +310,30 @@ type CrowdDetectionResult struct {
 	TotalCrowdPeople int32       `json:"total_crowd_people"`
 }
 
+type VehicleCrowdInfo struct {
+	Rectangle  []float32 `json:"rectangle"` // [x1, y1, x2, y2]
+	Count      int32     `json:"count"`
+	AlertLevel string    `json:"alert_level"` // "low", "medium", "high"
+}
+
+type VehicleCrowdDetectionResult struct {
+	Crowds             []VehicleCrowdInfo `json:"crowds"`
+	TotalCrowdVehicles int32              `json:"total_crowd_vehicles"`
+}
+
 // SolutionResults represents the results from AI solution processing
 type SolutionResults struct {
 	// People Counter Solution
 	PeopleCurrentCount int32 `json:"people_current_count"`
-	PeopleTotalCount   int32 `json:"people_total_count"`
-	PeopleMaxCount     int32 `json:"people_max_count"`
-	PeopleOutCount     int32 `json:"people_out_count"`
+	PeopleTotalCount   int32 `json:"people_total_count,omitempty"`
+	PeopleMaxCount     int32 `json:"people_max_count,omitempty"`
+	PeopleOutCount     int32 `json:"people_out_count,omitempty"`
+
+	// Vehicle Counter Solution
+	VehicleCurrentCount int32 `json:"vehicle_current_count"`
+	VehicleTotalCount   int32 `json:"vehicle_total_count,omitempty"`
+	VehicleMaxCount     int32 `json:"vehicle_max_count,omitempty"`
+	VehicleOutCount     int32 `json:"vehicle_out_count,omitempty"`
 
 	// PPE Detection Solution
 	PPEViolationDetected *bool `json:"ppe_violation_detected,omitempty"`
@@ -325,7 +342,8 @@ type SolutionResults struct {
 	IntrusionDetected *bool `json:"intrusion_detected,omitempty"`
 
 	// Crowd Detection Solution
-	CrowdDetection *CrowdDetectionResult `json:"crowd_detection,omitempty"`
+	CrowdDetection        *CrowdDetectionResult        `json:"crowd_detection,omitempty"`
+	VehicleCrowdDetection *VehicleCrowdDetectionResult `json:"vehicle_crowd_detection,omitempty"`
 }
 
 // AIProcessingResult represents the complete result from AI processing

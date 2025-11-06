@@ -140,11 +140,21 @@ message Detection {
 	// Bike Helmet Detection (separate from PPE)
 	optional bool has_bike_helmet = 29;
 
+	// Tripling Alert (for two-wheelers with more than 2 people)
+	optional bool tripling = 30;
+
+	// Merged bounding box for person+two-wheeler when helmet not detected (fovea helmet detection)
+	repeated float merged_bbox = 31; // [x1, y1, x2, y2] - merged box covering person and two-wheeler
+
+	// Tripling merged bounding box for multiple people on two-wheeler (fovea tripling detection)
+	repeated float tripling_merged_bbox = 32; // [x1, y1, x2, y2] - merged box for tripling violations
+
 	// Intrusion Alerts
 	optional bool is_intrusion = 17; 
 
 	// Numberplate Recognition
 	optional string plate = 18;
+	repeated float plate_bbox = 36;
 
 	// Cloth Color Detection
 	optional string color = 19;
@@ -162,7 +172,15 @@ message Detection {
 	// face Recognition
 	optional string recognition_id = 24;
 	optional float recognition_score = 25;
-
+	
+	// Red Light Violation
+	optional bool redlight_violation = 33;
+	
+	// Vehicle Speed Detection
+	optional float speed_kmph = 34;  // Speed in km/h for vehicles
+	
+	// Wrong Lane Detection
+	optional bool wrong_lane = 35;  // True if vehicle is in wrong lane
 }
 
 message CrowdInfo {
@@ -174,6 +192,17 @@ message CrowdInfo {
 message CrowdDetectionResult {
 	repeated CrowdInfo crowds = 1;
 	int32 total_crowd_people = 2;
+}
+
+message VehicleCrowdInfo {
+	repeated float rectangle = 1; // [x1, y1, x2, y2]
+	int32 count = 2;
+	string alert_level = 3; // "low", "medium", "high"
+}
+
+message VehicleCrowdDetectionResult {
+	repeated VehicleCrowdInfo crowds = 1;
+	int32 total_crowd_vehicles = 2;
 }
 
 // Solution result
@@ -190,22 +219,32 @@ message SolutionResult {
 	optional int32 total_count = 6;
 	optional int32 max_count = 7;
 
+	// Vehicle Counter
+	repeated int32 vehicle_in_region_tracks = 19;
+	optional int32 vehicle_current_count = 20;
+	optional int32 vehicle_out_region_count = 21;
+	optional int32 vehicle_total_count = 22;
+	optional int32 vehicle_max_count = 23;
+
 	// Intrusion Detection
 	optional bool intrusion_detected = 8;
 	optional float last_intrusion_time = 9;
 	repeated int32 intruder_tracks = 10;
 
-	// Numberplate Recognition
-	map<int32, string> validated_plates = 11;
-
 	// Cloth Color Detection
 	repeated ColorResult clothing_colors = 12;
 
-	// Crowd Detection
+	// Crowd Detection (for people)
 	optional CrowdDetectionResult crowd_detection = 13;
+
+	// Vehicle Crowd Detection
+	optional VehicleCrowdDetectionResult vehicle_crowd_detection = 18;
 
 	// Loitering Detection
 	optional bool loitering_detected = 15;
+	
+	// Status string for solutions
+	optional string status = 17;
 	
 	// Helmet detection uses the has_helmet field in Detection message directly
 }
