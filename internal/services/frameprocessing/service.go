@@ -224,7 +224,7 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 		// }
 
 		// Print Track ID
-		gocv.PutText(mat, fmt.Sprintf("%d", det.TrackID), image.Pt(x1, y1), gocv.FontHersheySimplex, 0.4, detColor, 2)
+		// gocv.PutText(mat, fmt.Sprintf("%d", det.TrackID), image.Pt(x1, y1), gocv.FontHersheySimplex, 0.4, detColor, 2)
 	}
 }
 
@@ -431,7 +431,14 @@ func (fp *FrameProcessor) processFrameWithAI(rawFrame *models.RawFrame, projects
 		return result
 	}
 
-	// log.Info().Msgf("Response: %v", resp)
+	// Pretty print the AI response as JSON
+	// respJson, err := json.MarshalIndent(resp, "", "  ")
+	// if err != nil {
+	// 	log.Warn().Err(err).Msg("Failed to pretty print AI response as JSON")
+	// } else {
+	// 	log.Info().Msgf("AI Response:\n%s", string(respJson))
+	// }
+
 	// AI succeeded!
 	result.FrameProcessed = true
 	fp.extractDetectionsFromResponse(resp, result)
