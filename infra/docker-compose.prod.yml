@@ -3,42 +3,17 @@ name: kepler-worker
 services:
   kepler-worker:
     image: skylarklabs/kepler-worker-go:latest
-    container_name: kepler-worker-go
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile
-      args:
-        - VERSION=${VERSION:-1.0.0}
-    environment:
-      - MAX_FPS_NO_AI=${MAX_FPS_NO_AI:-30}
-      - MAX_FPS_WITH_AI=${MAX_FPS_WITH_AI:-30}
-      - PUBLISHING_FPS=${PUBLISHING_FPS:-30}
-      - NATS_URL=${NATS_URL:-nats://172.17.0.1:4222}
-      - AI_GRPC_URL=${AI_GRPC_URL:-49.248.155.76:50052}
-      - MEDIAMTX_URL=http://kepler-mediamtx:8889
-      - SHOW_METADATA=${SHOW_METADATA:-true}
-      - SHOW_CAMERA_ID=${SHOW_CAMERA_ID:-false}
-      - SHOW_FRAME_ID=${SHOW_FRAME_ID:-false}
-      - SHOW_RESOLUTION=${SHOW_RESOLUTION:-false}
-      - SHOW_FPS=${SHOW_FPS:-true}
-      - SHOW_LATENCY=${SHOW_LATENCY:-false}
-      - SHOW_AI_STATUS=${SHOW_AI_STATUS:-true}
-      - SHOW_AI_DETECTIONS_COUNT=${SHOW_AI_DETECTIONS_COUNT:-false}
-      - SHOW_AI_PROCESSING_TIME=${SHOW_AI_PROCESSING_TIME:-false}
-      - SHOW_PROJECT_COUNTS=${SHOW_PROJECT_COUNTS:-false}
-      - SHOW_TIME=${SHOW_TIME:-false}
-      - SHOW_QUALITY=${SHOW_QUALITY:-false}
-      - SHOW_BITRATE=${SHOW_BITRATE:-false}
-      - OVERLAY_COLOR=${OVERLAY_COLOR:-"#FFFFFF"}
-      - OVERLAY_FONT=${OVERLAY_FONT:-2}
+    container_name: kepler-worker-go
+    env_file:
+      - .env.production
     ports:
       - "8000:8000"
       - "8080:8080"
     volumes:
       - kepler-videos:/app/kepler-videos
-    networks:
-      - worker
-    restart: always
     depends_on:
       kepler-mediamtx:
         condition: service_healthy
@@ -48,6 +23,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    restart: unless-stopped
+    networks:
+      - worker
   
   kepler-mediamtx:
     image: bluenviron/mediamtx:1
@@ -64,15 +42,15 @@ services:
       - "8889:8889"
       - "8200:8200"
       - "8201:8201"
-    networks:
-      - worker
-    restart: always
     healthcheck:
       test: ['CMD', '/mediamtx', '--version']
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
+    restart: unless-stopped
+    networks:
+      - worker
 
 volumes:
   kepler-videos:

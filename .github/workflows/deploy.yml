@@ -1,0 +1,71 @@
+name: Deploy Kepler Worker
+
+on:
+  push:
+    branches:
+      - master
+      - canary
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'proto/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'infra/docker/Dockerfile'
+      - '.github/workflows/deploy.yml'
+
+env:
+  DOCKERHUB_IMAGE: skylarklabs/kepler-worker-go
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set environment variables
+      id: env
+      run: |
+        if [ "${{ github.ref }}" = "refs/heads/master" ]; then
+          echo "ENVIRONMENT=production" >> $GITHUB_OUTPUT
+          echo "DOCKER_TAG=latest" >> $GITHUB_OUTPUT
+        elif [ "${{ github.ref }}" = "refs/heads/canary" ]; then
+          echo "ENVIRONMENT=canary" >> $GITHUB_OUTPUT
+          echo "DOCKER_TAG=canary" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./infra/docker/Dockerfile
+        push: true
+        platforms: linux/amd64
+        tags: |
+          ${{ env.DOCKERHUB_IMAGE }}:${{ steps.env.outputs.DOCKER_TAG }}
+          ${{ env.DOCKERHUB_IMAGE }}:${{ steps.env.outputs.ENVIRONMENT }}-${{ github.sha }}
+        cache-from: type=gha,scope=worker-${{ steps.env.outputs.ENVIRONMENT }}
+        cache-to: type=gha,mode=max,scope=worker-${{ steps.env.outputs.ENVIRONMENT }}
+
+    - name: Deployment summary
+      run: |
+        echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: ${{ steps.env.outputs.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Docker Tag**: ${{ steps.env.outputs.DOCKER_TAG }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "#### Image Built" >> $GITHUB_STEP_SUMMARY
+        echo "- Docker Hub: \`${{ env.DOCKERHUB_IMAGE }}:${{ steps.env.outputs.DOCKER_TAG }}\`" >> $GITHUB_STEP_SUMMARY
+
