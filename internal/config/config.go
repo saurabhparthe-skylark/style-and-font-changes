@@ -169,7 +169,7 @@ func Load() *Config {
 		MediaMTXRTSPURL: getEnv("MEDIAMTX_RTSP_URL", "rtsp://localhost:8554"),
 		MediaMTXAPIURL:  getEnv("MEDIAMTX_API_URL", "http://localhost:9997"),
 		BackendURL:      getEnv("BACKEND_URL", "http://localhost:8500"),
-		AIGRPCURL:       getEnv("AI_GRPC_URL", "192.168.1.76:50052"),
+		AIGRPCURL:       getEnv("AI_GRPC_URL", "localhost:50052"),
 
 		// NATS (configured for Docker Compose setup)
 		NatsURL:            getNatsURL(),
@@ -244,20 +244,20 @@ func Load() *Config {
 		SwaggerPort: getEnvInt("SWAGGER_PORT", 8000),
 
 		// Metadata Overlay
-		ShowFPS:               getEnvBool("SHOW_FPS", true),
-		ShowLatency:           getEnvBool("SHOW_LATENCY", true),
-		ShowCameraID:          getEnvBool("SHOW_CAMERA_ID", true),
-		ShowAIStatus:          getEnvBool("SHOW_AI_STATUS", true),
-		ShowMetadata:          getEnvBool("SHOW_METADATA", true),
-		ShowFrameID:           getEnvBool("SHOW_FRAME_ID", true),
-		ShowResolution:        getEnvBool("SHOW_RESOLUTION", true),
-		ShowTime:              getEnvBool("SHOW_TIME", true),
-		ShowQuality:           getEnvBool("SHOW_QUALITY", true),
-		ShowBitrate:           getEnvBool("SHOW_BITRATE", true),
-		ShowAIDetectionsCount: getEnvBool("SHOW_AI_DETECTIONS_COUNT", true),
-		ShowAIProcessingTime:  getEnvBool("SHOW_AI_PROCESSING_TIME", true),
-		ShowProjectCounts:     getEnvBool("SHOW_PROJECT_COUNTS", true),
-		OverlayColor:          getEnv("OVERLAY_COLOR", "#FF0000"),
+		ShowFPS:               getEnvBool("SHOW_FPS", false),
+		ShowLatency:           getEnvBool("SHOW_LATENCY", false),
+		ShowCameraID:          getEnvBool("SHOW_CAMERA_ID", false),
+		ShowAIStatus:          getEnvBool("SHOW_AI_STATUS", false),
+		ShowMetadata:          getEnvBool("SHOW_METADATA", false),
+		ShowFrameID:           getEnvBool("SHOW_FRAME_ID", false),
+		ShowResolution:        getEnvBool("SHOW_RESOLUTION", false),
+		ShowTime:              getEnvBool("SHOW_TIME", false),
+		ShowQuality:           getEnvBool("SHOW_QUALITY", false),
+		ShowBitrate:           getEnvBool("SHOW_BITRATE", false),
+		ShowAIDetectionsCount: getEnvBool("SHOW_AI_DETECTIONS_COUNT", false),
+		ShowAIProcessingTime:  getEnvBool("SHOW_AI_PROCESSING_TIME", false),
+		ShowProjectCounts:     getEnvBool("SHOW_PROJECT_COUNTS", false),
+		OverlayColor:          getEnv("OVERLAY_COLOR", "#FFFFFF"),
 		OverlayFont:           getEnvInt("OVERLAY_FONT", 2),
 
 		// WebRTC Configuration
