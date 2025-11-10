@@ -52,7 +52,7 @@ services:
     image: bluenviron/mediamtx:1
     container_name: worker-mediamtx
     volumes:
-      - ./data/dev/configs/mediamtx.yml:/mediamtx.yml:ro
+      - ./configs/mediamtx.yml:/mediamtx.yml:ro
       - ./data/dev/mediamtx/recordings:/recordings
       - ./data/dev/logs/mediamtx:/logs
     ports:

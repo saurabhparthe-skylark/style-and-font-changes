@@ -1,0 +1,63 @@
+# MediaMTX Configuration for Kepler
+# Optimized for minimum latency streaming
+
+# General
+logLevel: info
+logDestinations: [stdout]
+
+# API and metrics
+api: yes
+apiAddress: 0.0.0.0:9997
+metrics: yes
+metricsAddress: 0.0.0.0:9998
+apiAllowOrigin: "*"
+
+# RTSP server
+rtsp: yes
+rtspAddress: 0.0.0.0:8554
+rtspTransports: ["tcp", "udp"]
+
+# RTMP server (for worker publishing)
+rtmp: no
+rtmpAddress: 0.0.0.0:1935
+
+# SRT server (ultra-low latency UDP-based streaming)
+srt: no
+srtAddress: 0.0.0.0:8890
+
+# HLS server
+hls: no
+hlsAddress: 0.0.0.0:8888
+hlsAllowOrigin: "*"
+
+# WebRTC server optimized for low latency
+webrtc: yes
+webrtcAddress: 0.0.0.0:8889
+webrtcAllowOrigin: "*"
+webrtcEncryption: no
+
+
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+  - url: stun:stun1.l.google.com:19302
+  - url: stun:stun2.l.google.com:19302
+
+webrtcLocalUDPAddress: 0.0.0.0:8200
+webrtcLocalTCPAddress: 0.0.0.0:8201
+
+readTimeout: 15s
+writeTimeout: 15s
+writeQueueSize: 1024
+udpMaxPayloadSize: 1472
+multicastRTPPort: 8002
+multicastRTCPPort: 8003
+
+# Path settings
+paths:
+  # Allow all paths with minimal config
+  ~^.*$:
+    source: publisher
+    publishUser: ""
+    publishPass: ""
+    readUser: ""
+    readPass: ""
