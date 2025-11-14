@@ -224,7 +224,7 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 		// }
 
 		// Print Track ID
-		gocv.PutText(mat, fmt.Sprintf("%d", det.TrackID), image.Pt(x1, y1), gocv.FontHersheySimplex, 0.4, detColor, 2)
+		gocv.PutText(mat, fmt.Sprintf("%d", det.TrackID), image.Pt(x1, y1), gocv.FontHersheySimplex, 0.8, detColor, 2)
 
 	}
 }
