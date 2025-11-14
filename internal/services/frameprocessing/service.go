@@ -265,7 +265,7 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 				solutions.DrawPeopleCounter("DRONE", mat, solution, &y)
 			}
 
-		case "cctv_person_counter":
+		case "cctv_outdoor_person_counter":
 			if solution, exists := solutionsMap["cctv_outdoor_person_counter"]; exists {
 				solutions.DrawPeopleCounter("CCTV", mat, solution, &y)
 			}
