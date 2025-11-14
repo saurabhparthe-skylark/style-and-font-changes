@@ -502,11 +502,11 @@ func (s *Service) getDetectionType(projectName, label string) models.DetectionTy
 	projectLower := strings.ToLower(projectName)
 
 	switch projectLower {
-	case "drone_intrusion_detection", "drone_thermal_intrusion_detection", "cctv_intrusion_detection":
+	case "drone_intrusion_detection", "drone_thermal_intrusion_detection", "cctv_outdoor_intrusion_detection":
 		return models.DetectionTypeIntrusion
-	case "drone_ppe_detection", "cctv_ppe_detection", "cctv_helmet_detection", "fovea_helmet_detection":
+	case "drone_ppe_detection", "cctv_outdoor_ppe_detection", "cctv_outdoor_helmet_detection", "fovea_helmet_detection":
 		return models.DetectionTypePPE
-	case "drone_fire_smoke_detection", "cctv_fire_smoke_detection":
+	case "drone_fire_smoke_detection", "cctv_outdoor_fire_smoke_detection":
 		return models.DetectionTypeFireSmoke
 	}
 

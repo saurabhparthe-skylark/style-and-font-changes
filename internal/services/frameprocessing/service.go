@@ -224,7 +224,8 @@ func (d defaultOverlay) DrawDetections(mat *gocv.Mat, detections []models.Detect
 		// }
 
 		// Print Track ID
-		// gocv.PutText(mat, fmt.Sprintf("%d", det.TrackID), image.Pt(x1, y1), gocv.FontHersheySimplex, 0.4, detColor, 2)
+		gocv.PutText(mat, fmt.Sprintf("%d", det.TrackID), image.Pt(x1, y1), gocv.FontHersheySimplex, 0.4, detColor, 2)
+
 	}
 }
 
@@ -265,7 +266,7 @@ func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[str
 			}
 
 		case "cctv_person_counter":
-			if solution, exists := solutionsMap["cctv_person_counter"]; exists {
+			if solution, exists := solutionsMap["cctv_outdoor_person_counter"]; exists {
 				solutions.DrawPeopleCounter("CCTV", mat, solution, &y)
 			}
 
