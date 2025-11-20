@@ -1,7 +1,6 @@
 package solutions
 
 import (
-	"fmt"
 	"image/color"
 
 	"kepler-worker-go/internal/models"
@@ -9,30 +8,22 @@ import (
 	"gocv.io/x/gocv"
 )
 
-// DrawPeopleCounter draws people counting overlay with beautiful design
-func DrawPeopleCounter(header string, mat *gocv.Mat, solution models.SolutionResults, y *int) {
+// DrawPeopleCounter draws people counting overlay in compact horizontal format
+// Returns the width of the drawn counter
+func DrawPeopleCounter(header string, mat *gocv.Mat, solution models.SolutionResults, x, y int) int {
 	if mat == nil {
-		return
+		return 0
 	}
 
-	// Title header with beautiful styling
-	headerText := header + " PEOPLE COUNTER"
-	DrawTextEnhanced(mat, headerText, 15, *y, color.RGBA{R: 0, G: 255, B: 255, A: 255}, 0.8, 2)
-	*y += 35
-
-	// Current count with enhanced styling and icon-like prefix
-	currentText := fmt.Sprintf("Current: %d", solution.PeopleCurrentCount)
+	// Professional color scheme - remove DRONE/CCTV prefix
+	titleColor := color.RGBA{R: 64, G: 224, B: 208, A: 255} // Professional turquoise/cyan for people
 	currentColor := getPeopleCountColor(solution.PeopleCurrentCount)
-	DrawTextEnhanced(mat, currentText, 15, *y, currentColor, 0.75, 2)
-	*y += 32
+	totalColor := color.RGBA{R: 255, G: 223, B: 0, A: 255} // Professional gold/amber for total
 
-	// Total count with golden color
-	totalText := fmt.Sprintf("Total: %d", solution.PeopleTotalCount)
-	DrawTextEnhanced(mat, totalText, 15, *y, color.RGBA{R: 255, G: 215, B: 0, A: 255}, 0.7, 2)
-	*y += 30
-
-	// Add some spacing after people counter
-	*y += 10
+	// Draw compact horizontal counter (removed header prefix)
+	title := "PEOPLE COUNTER"
+	return DrawCompactCounter(mat, title, solution.PeopleCurrentCount, solution.PeopleTotalCount,
+		x, y, titleColor, currentColor, totalColor)
 }
 
 // getPeopleCountColor returns dynamic color based on people count

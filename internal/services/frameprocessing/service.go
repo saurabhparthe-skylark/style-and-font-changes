@@ -239,40 +239,105 @@ func (d defaultOverlay) DrawSolutions(mat *gocv.Mat, solutionResults map[string]
 	log.Warn().Msg("DrawSolutions called with old interface - need projects and detections")
 }
 
-// drawSolutionOverlays draws overlays for each project using simple for and switch
+// drawSolutionOverlays draws overlays for each project using organized, standardized layout
+// Counters are drawn horizontally in one line at the top, then Crowd Detection below
 func drawSolutionOverlays(mat *gocv.Mat, projects []string, solutionsMap map[string]models.SolutionResults, detections []models.Detection) {
 	if mat == nil || len(projects) == 0 {
 		return
 	}
 
-	// We looping over the projects and draw the solution overlays
-	y := 30
+	// Starting position - top left
+	startX := 15
+	startY := 20
+	horizontalSpacing := 15 // Increased spacing between elements for better readability
+	lineHeight := 35        // Increased height between lines for better separation
+
+	// LINE 1: Draw all COUNTERS horizontally
+	x := startX
+	y := startY
+
+	// Vehicle counter
 	for _, project := range projects {
 		switch project {
-
-		case "drone_crowd_detection":
-			if solution, exists := solutionsMap["drone_crowd_detection"]; exists {
-				solutions.DrawPeopleCrowdDetection(mat, solution, &y)
-			}
-
-		case "drone_vehicle_crowd":
-			if solution, exists := solutionsMap["drone_vehicle_crowd"]; exists {
-				solutions.DrawVehicleCrowdDetection(mat, solution, &y)
-			}
-
-		case "drone_person_counter":
-			if solution, exists := solutionsMap["drone_person_counter"]; exists {
-				solutions.DrawPeopleCounter("DRONE", mat, solution, &y)
-			}
-
-		case "cctv_outdoor_person_counter":
-			if solution, exists := solutionsMap["cctv_outdoor_person_counter"]; exists {
-				solutions.DrawPeopleCounter("CCTV", mat, solution, &y)
-			}
-
 		case "drone_vehicle_counter":
 			if solution, exists := solutionsMap["drone_vehicle_counter"]; exists {
-				solutions.DrawVehicleCounter("DRONE", mat, solution, &y)
+				width := solutions.DrawVehicleCounter("", mat, solution, x, y)
+				if width > 0 {
+					x += width + horizontalSpacing
+				}
+			}
+		}
+	}
+
+	// People counters (draw next to vehicle counter on same line)
+	for _, project := range projects {
+		switch project {
+		case "drone_person_counter":
+			if solution, exists := solutionsMap["drone_person_counter"]; exists {
+				width := solutions.DrawPeopleCounter("", mat, solution, x, y)
+				if width > 0 {
+					x += width + horizontalSpacing
+				}
+			}
+		case "cctv_outdoor_person_counter":
+			if solution, exists := solutionsMap["cctv_outdoor_person_counter"]; exists {
+				width := solutions.DrawPeopleCounter("", mat, solution, x, y)
+				if width > 0 {
+					x += width + horizontalSpacing
+				}
+			}
+		}
+	}
+
+	// LINE 2: Draw CROWD DETECTION on second line (starting from left)
+	x = startX
+	y = startY + lineHeight
+
+	// Vehicle crowd detection
+	for _, project := range projects {
+		switch project {
+		case "drone_vehicle_crowd":
+			if solution, exists := solutionsMap["drone_vehicle_crowd"]; exists {
+				width := solutions.DrawVehicleCrowdDetectionCompact(mat, solution, x, y)
+				if width > 0 {
+					x += width + horizontalSpacing
+				}
+			}
+		}
+	}
+
+	// People crowd detection (draw next to vehicle crowd detection on same line)
+	for _, project := range projects {
+		switch project {
+		case "drone_crowd_detection":
+			if solution, exists := solutionsMap["drone_crowd_detection"]; exists {
+				width := solutions.DrawPeopleCrowdDetectionCompact(mat, solution, x, y)
+				if width > 0 {
+					x += width + horizontalSpacing
+				}
+			}
+		}
+	}
+
+	// PHASE 2: Draw CROWD DETECTION bounding boxes on video (visual overlays only)
+	// Vehicle crowd detection - draw bounding boxes only
+	for _, project := range projects {
+		switch project {
+		case "drone_vehicle_crowd":
+			if solution, exists := solutionsMap["drone_vehicle_crowd"]; exists {
+				// Only draw bounding boxes, not the text panel
+				solutions.DrawVehicleCrowdBoxesOnly(mat, solution)
+			}
+		}
+	}
+
+	// People crowd detection - draw bounding boxes only
+	for _, project := range projects {
+		switch project {
+		case "drone_crowd_detection":
+			if solution, exists := solutionsMap["drone_crowd_detection"]; exists {
+				// Only draw bounding boxes, not the text panel
+				solutions.DrawPeopleCrowdBoxesOnly(mat, solution)
 			}
 		}
 	}
